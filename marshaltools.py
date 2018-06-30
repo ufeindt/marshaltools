@@ -43,18 +43,18 @@ def encrypt_config():
     """ """
     import getpass
     des = DES.new(base64.b64decode( _SOURCE ), DES.MODE_ECB)
+    out = {}
+    out['username'] = raw_input('Enter your GROWTH Marshal username: ')
+    out['password'] = getpass.getpass()
     fileout = open(_CONFIG_FILE, "wb")
-    username = raw_input('Enter your GROWTH Marshal username: ')
-    fileout.write(des.encrypt(pad(username)))
-    fileout.write(b"\n")
-    fileout.write(des.encrypt(pad(getpass.getpass())))
+    fileout.write(des.encrypt(pad(json.dumps(out))))
     fileout.close()
 
 def decrypt_config():
     """ """
     des = DES.new(  base64.b64decode( _SOURCE ), DES.MODE_ECB)
-    return [des.decrypt(l).decode("utf-8").replace(" ","").replace('"',"").replace("'","" )
-            for l in open(_CONFIG_FILE, "rb").read().splitlines()]
+    out = json.loads(des.decrypt(open(_CONFIG_FILE, "rb").read()))
+    return out['username'], out['password']
 
 if not os.path.exists(_CONFIG_FILE):
     encrypt_config()
