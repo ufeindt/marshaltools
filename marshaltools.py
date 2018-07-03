@@ -129,7 +129,7 @@ class ProgramList(BaseTable):
         
         r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/list_program_sources.cgi', 
                   auth=(self.user, self.passwd), 
-                  data={'programidx': programidx})
+                  data={'programidx': programidx, 'getredshift': 1, 'getclassification': 1})
         s_tmp = json.loads(r.text)
         self.sources = {}
         for s_ in s_tmp:
@@ -163,6 +163,8 @@ class ProgramList(BaseTable):
         if name not in self.lightcurves.keys():
             lc = MarshalLightcurve(
                 name, ra=self.sources[name]['ra'], dec=self.sources[name]['dec'],
+                redshift=self.sources[name]['redshift'],
+                classification=self.sources[name]['classification'],
                 filter_dict = self.filter_dict, sfd_dir=self.sfd_dir
             )
             self.lightcurves[name] = lc
@@ -236,12 +238,15 @@ class MarshalLightcurve(BaseTable):
                    and filter, values are the sncosmo bandpass names, 
                    see _DEFAULT_FILTERS for an example. 
     """
-    def __init__(self, name, ra=None, dec=None, sfd_dir=None, **kwargs):
+    def __init__(self, name, ra=None, dec=None, redshift=None, classification=None,
+                 sfd_dir=None, **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
 
         self.name = name
+        self.redshift = redshift
+        self.classification = classification
         self.sfd_dir = sfd_dir
         self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
         
@@ -265,17 +270,17 @@ class MarshalLightcurve(BaseTable):
         self.table_orig = Table.read(r, format='ascii.csv')
         self._remove_duplicates_()
 
-        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/view_source.cgi',
-                  auth=(self.user, self.passwd), 
-                  data={'name': self.name})
+        # r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/view_source.cgi',
+        #           auth=(self.user, self.passwd), 
+        #           data={'name': self.name})
         # self.classification = (re.findall('150%\">.*<',
         #                                   r.text.replace('\n', ''))[0]
         #                        .split('<')[0].split('>')[-1].strip())
-        try:
-            self.redshift = float(re.findall('[0-9]\.[0-9]*',
-                                             re.findall('z = [0-9\.]*', r.text)[0])[0])
-        except IndexError:
-            self.redshift = None
+        # try:
+        #     self.redshift = float(re.findall('[0-9]\.[0-9]*',
+        #                                      re.findall('z = [0-9\.]*', r.text)[0])[0])
+        # except IndexError:
+        #     self.redshift = None
 
     @property
     def table_sncosmo(self):
@@ -301,9 +306,7 @@ class MarshalLightcurve(BaseTable):
                 eflux[n] = 10**(-0.4*(r['limmag']-zp[n]))/5.
 
             if f in self.filter_dict.keys():
-                f = self.filter_dict[f]
-                
-                band.append(f)
+                band.append(self.filter_dict[f])
                 zpsys.append('ab')
                 mask.append(True)
             else:
@@ -316,7 +319,6 @@ class MarshalLightcurve(BaseTable):
             out.meta['mwebv'] = self.mwebv
         
         return out
-
 
     def _remove_duplicates_(self):
         """This function removes potential duplicates from the lightcurve,
