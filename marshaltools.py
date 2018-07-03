@@ -311,7 +311,8 @@ class MarshalLightcurve(BaseTable):
                 mask.append(True)
             else:
                 mask.append(False)
-            
+
+        mask = np.array(mask)
         out = Table(data=[mjd[mask], band, flux[mask], eflux[mask], zp[mask], zpsys],
                     names=['mjd', 'band', 'flux', 'fluxerr', 'zp', 'zpsys'])
         out.meta['z'] = self.redshift
