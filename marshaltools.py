@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-"""
+from __future__ import absolute_import, print_function
 
 import numpy as np
 import requests
@@ -24,7 +22,18 @@ _DEFAULT_FILTERS = {
     ('P48+ZTF', 'g'): 'p48g',
     ('P48+ZTF', 'r'): 'p48r',
     ('P48+ZTF', 'i'): 'p48i',
+    ('P60+ZTF', 'i'): 'p60i',
+    ('P60+ZTF', 'r'): 'p60r',
+    ('P60+ZTF', 'g'): 'p60g',
+    ('P60+ZTF', 'u'): 'p60u',
+    ('Swift+UVOT', 'B'): 'uvotb',
+    ('Swift+UVOT', 'u'): 'uvotu',
+    ('Swift+UVOT', 'V'): 'uvotv',
+    ('Swift+UVOT', 'UVM2'): 'uvm2',
+    ('Swift+UVOT', 'UVW1'): 'uvw1',
+    ('Swift+UVOT', 'UVW2'): 'uvw2',
 }
+
     
 ###
 ### Config functions (modified from ztfquery)
@@ -44,16 +53,18 @@ def encrypt_config():
     import getpass
     des = DES.new(base64.b64decode( _SOURCE ), DES.MODE_ECB)
     out = {}
-    out['username'] = raw_input('Enter your GROWTH Marshal username: ')
+    out['username'] = input('Enter your GROWTH Marshal username: ')
     out['password'] = getpass.getpass()
-    fileout = open(_CONFIG_FILE, "wb")
-    fileout.write(des.encrypt(pad(json.dumps(out))))
+    fileout = open(_CONFIG_FILE, "w")
+    #fileout.write(des.encrypt(pad(json.dumps(out))))
+    fileout.write(json.dumps(out))
     fileout.close()
 
 def decrypt_config():
     """ """
     des = DES.new(  base64.b64decode( _SOURCE ), DES.MODE_ECB)
-    out = json.loads(des.decrypt(open(_CONFIG_FILE, "rb").read()))
+    # out = json.loads(des.decrypt(open(_CONFIG_FILE, "rb").read()))
+    out = json.load(open(_CONFIG_FILE, "r"))
     return out['username'], out['password']
 
 if not os.path.exists(_CONFIG_FILE):
@@ -91,10 +102,8 @@ class BaseTable(object):
 class ProgramList(BaseTable):
     """Class to list all sources in one of your science programs in 
     the marshal.
-
     Arguments:
     program -- name of the science program you are looking for (case-sensitive)
-
     Options:
     user        -- Marshal username (overrides loading the name from file)
     passwd      -- Marshal password (overrides loading the name from file)
@@ -150,7 +159,6 @@ class ProgramList(BaseTable):
     def get_lightcurve(self, name):
         """Download the lightcurve for a source in the program. 
         Other sources will not be downloaded.
-
         Arguments:
         name -- source name in the GROWTH marshal
         """
@@ -195,11 +203,31 @@ class ProgramList(BaseTable):
             with open(filename, 'wb') as handle:
                 for block in r.iter_content(1024):
                     handle.write(block)
+
+    def check_spec(self, name):
+        """Check if spectra for an object are available
+        
+        Arguments:
+        name     -- source name in the GROWTH marshal
+        filename -- filename for saving the archive
+        """
+        if name not in self.sources.keys():
+            raise ValueError('Unknown transient name: %s'%name)
+
+        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/batch_spec.cgi',
+                          stream=True,
+                          auth=(self.user, self.passwd), 
+                          data={'name': name})
+        r.raise_for_status()
+
+        if r.text.startswith('No spectrum'):
+            return 0
+        else:
+            return 1
                     
     def download_all_specs(self, download_path=''):
         """Download all spectra for the science program. 
         (Will not create a file for sources without spectra)
-
         Options:
         download_path -- directory where to save the archives
         """
@@ -225,7 +253,6 @@ class MarshalLightcurve(BaseTable):
     """Class for the lightcurve of a single source in the Marshal
     Arguments:  
     name -- source name in the GROWTH marshal
-
     Options:
     ra          -- right ascension of source in deg
     dec         -- declination of source in deg
@@ -259,6 +286,8 @@ class MarshalLightcurve(BaseTable):
                 else:
                     self.dustmap = sfdmap.SFDMap(self.sfd_dir)
                 self.mwebv = self.dustmap.ebv(ra, dec)
+            else:
+                self.mwebv = 0.0
             
         r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/print_lc.cgi',
                           auth=(self.user, self.passwd),
@@ -312,7 +341,7 @@ class MarshalLightcurve(BaseTable):
             else:
                 mask.append(False)
 
-        mask = np.array(mask)
+        mask = np.array(mask, dtype=bool)
         out = Table(data=[mjd[mask], band, flux[mask], eflux[mask], zp[mask], zpsys],
                     names=['mjd', 'band', 'flux', 'fluxerr', 'zp', 'zpsys'])
         out.meta['z'] = self.redshift
@@ -362,3 +391,59 @@ class MarshalLightcurve(BaseTable):
                             mask.append(False)
 
         self.table = t[np.array(mask)]
+
+
+###############################################################
+######################## UPLOAD FILTERS #######################
+###############################################################
+
+import sncosmo
+
+def filters():
+
+    bandsP48 = {'p48i': 'P48_I.dat',
+                'p48r': 'P48_R.dat',
+                'p48g': 'P48_g.dat'}
+
+    fileDirectory = 'filters/P48/'
+    for bandName, fileName in bandsP48.items():
+        filePath = os.path.join(fileDirectory, fileName)
+        if not os.path.exists(filePath):
+            raise IOError("No such file: %s" % filePath)
+        b = np.loadtxt(filePath)
+        band = sncosmo.Bandpass(b[:, 0], b[:, 1], name=bandName)
+        sncosmo.registry.register(band, force=True)
+
+    ##########
+
+    bandsP60 = {'p60i': 'iband_eff.dat',
+                'p60r': 'rband_eff.dat',
+                'p60g': 'gband_eff.dat',
+                'p60u': 'uband_eff.dat'}
+
+    fileDirectory = 'filters/SEDm/'
+    for bandName, fileName in bandsP60.items():
+        filePath = os.path.join(fileDirectory, fileName)
+        if not os.path.exists(filePath):
+            raise IOError("No such file: %s" % filePath)
+        b = np.loadtxt(filePath)
+        band = sncosmo.Bandpass(b[:, 0], b[:, 1], name=bandName)
+        sncosmo.registry.register(band, force=True)
+
+    ##########
+
+    bandsUVOT = {'uvotb': 'B_UVOT_synphot.txt',
+                'uvotu': 'U_UVOT_synphot.txt',
+                'uvotv': 'V_UVOT_synphot.txt',
+                'uvm2': 'UVM2_synphot.txt',
+                'uvw1': 'UVW1_synphot.txt',
+                'uvw2': 'UVW2_synphot.txt'}
+
+    fileDirectory = 'filters/UVOT/'
+    for bandName, fileName in bandsUVOT.items():
+        filePath = os.path.join(fileDirectory, fileName)
+        if not os.path.exists(filePath):
+            raise IOError("No such file: %s" % filePath)
+        b = np.loadtxt(filePath)
+        band = sncosmo.Bandpass(b[:, 0], b[:, 1], name=bandName)
+        sncosmo.registry.register(band, force=True)
