@@ -33,5 +33,5 @@ setup(# package information
       packagedir={PACKAGENAME: 'marshaltools'},
       # What data to include as packages
       include_package_data=True,
-      package_data={PACKAGENAME:['example_data/*.dat']}
+      package_data={PACKAGENAME:['data/*.txt']}
       )

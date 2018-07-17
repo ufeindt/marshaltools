@@ -8,10 +8,12 @@ import re
 import os
 import warnings
 
-import base64
-from Crypto.Cipher import DES
+#import base64
+#from Crypto.Cipher import DES
 
 from astropy.table import Table
+
+from .surveyfields import ZTFFields
 
 try:
     import sfdmap
@@ -52,7 +54,7 @@ def pad(text):
 def encrypt_config():
     """ """
     import getpass
-    des = DES.new(base64.b64decode( _SOURCE ), DES.MODE_ECB)
+    #des = DES.new(base64.b64decode( _SOURCE ), DES.MODE_ECB)
     out = {}
     out['username'] = input('Enter your GROWTH Marshal username: ')
     out['password'] = getpass.getpass()
@@ -63,7 +65,7 @@ def encrypt_config():
 
 def decrypt_config():
     """ """
-    des = DES.new(  base64.b64decode( _SOURCE ), DES.MODE_ECB)
+    #des = DES.new(  base64.b64decode( _SOURCE ), DES.MODE_ECB)
     # out = json.loads(des.decrypt(open(_CONFIG_FILE, "rb").read()))
     out = json.load(open(_CONFIG_FILE, "r"))
     return out['username'], out['password']
@@ -145,10 +147,15 @@ class ProgramList(BaseTable):
         for s_ in s_tmp:
             self.sources[s_['name']] = s_
         
-        # self.redshift = np.array([s['redshift'] for s in self.sources])
-        # self.ra = np.array([s['ra'] for s in self.sources])
-        # self.dec = np.array([s['dec'] for s in self.sources])
+        sf = ZTFFields()
+        ra_ = np.array([v_['ra'] for v_ in self.sources.values()])
+        dec_ = np.array([v_['dec'] for v_ in self.sources.values()])
+        fields_ = sf.coord2field(ra_, dec_)
 
+        for name, f_, c_ in zip(self.sources.keys(), fields_['field'], fields_['ccd']):
+            self.sources[name]['fields'] = f_
+            self.sources[name]['ccds'] = c_
+        
         self.lightcurves = None
         
     def fetch_all_lightcurves(self):
