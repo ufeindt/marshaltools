@@ -8,15 +8,17 @@
 import requests, json, os
 import numpy as np
 from astropy.table import Table
+from astropy.time import Time
+import astropy.units as u
+import concurrent.futures
+
 import logging
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(level = logging.INFO)
 
 from marshaltools import BaseTable
 from marshaltools import MarshalLightcurve
 from marshaltools import SurveyFields, ZTFFields
-from marshaltools.gci_utils import growthcgi
-
-
+from marshaltools.gci_utils import growthcgi, query_scanning_page
 from marshaltools.filters import _DEFAULT_FILTERS
 
 
@@ -53,6 +55,7 @@ class ProgramList(BaseTable):
         # now load all the saved sources
         self.get_saved_sources()
         self.lightcurves = None
+        self.candidates = []            # candidates sources from the scanning page
 
 
     def _list_programids(self):
@@ -83,7 +86,6 @@ class ProgramList(BaseTable):
         """
             get all saved sources for this program
         """
-        print (self.user, self.passwd)
         
         # execute request 
         s_tmp = growthcgi(
@@ -111,12 +113,96 @@ class ProgramList(BaseTable):
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
 
 
-    def get_scanning_sources(self):
+    def query_candidate_page(self, start_date=None, end_date=None, showsaved="selected"):
         """
-            download the list fo the sources belonging to this program
+            query scanning page for sources ingested in a given time range.
         """
-        pass
         
+        if start_date is None:
+            start_date = "2018-03-01 00:00:00"
+        if end_date is None:
+            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        return query_scanning_page(
+                                    start_date, 
+                                    end_date,
+                                    program_name=self.program,
+                                    showsaved=showsaved,
+                                    auth=(self.user, self.passwd),
+                                    logger=self.logger)
+
+
+    def get_candidates(self, trange=None, tstep=5*u.day, nworkers=12):
+        """
+            download the list fo the sources in the scanning page of this program.
+            
+            Parameters:
+            -----------
+                
+                
+                trange: `list` or `tuple` or None
+                    time constraints for the query in the form of (start_date, end_date). The
+                    two elements of tis list can be either strings or astropy.time.Time objects.
+                    
+                    if None, all the sources in the scanning page are retrieved slicing the 
+                    query in smaller time steps. Since the marhsall returns at max 200 candidates
+                    per query, if tis limit is reached, the time range of the query is 
+                    subdivided iteratively.
+                
+                tstep: `astropy.quantity`
+                    time step to use to splice the query.
+                
+                iteration: `bool`
+                    distinguis subcalls from the parent 'get_all' one.
+        """
+        
+        
+        # parse time limts
+        if not trange is None:
+            start_date = trange[0]
+            end_date   = trange[1]
+        else:
+            start_date = "2018-03-01 00:00:00"
+            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # subdivide the query in time steps
+        start, end = Time(start_date), Time(end_date)
+        times = np.arange(start, end, tstep).tolist()
+        times.append(end)
+        self.logger.info("Getting scanning page transient for program %s between %s and %s using dt: %.2f h"%
+                (self.program, start_date, end_date, tstep.to('hour').value))
+        
+        # create list of time bounds
+        tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
+        
+        # wrap function for multiprocessing
+        def download_candidates(tlim):
+            candids = self.query_candidate_page(tlim[0], tlim[1])
+            return candids
+
+        self.candidates = []
+        failed_tlims = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+            jobs = {
+                executor.submit(download_candidates, tlim): tlim for tlim in tlims}
+            for job in concurrent.futures.as_completed(jobs):
+                tlim = jobs[job]
+                try:
+                    candids = job.result()
+                    self.candidates+=candids
+                    self.logger.debug("query from %s to %s returned %d candidates. Total: %d"%
+                        (tlim[0].iso, tlim[1].iso, len(candids), len(self.candidates)))
+                except Exception as e:
+                    self.logger.error("query from %s to %s generated an exception"%
+                        (tlim[0].iso, tlim[1].iso))
+                    self.logger(e)
+                    failed_tlims.append(tlim)
+        self.logger.info("download of candidates complete.")
+        if len(failed_tlims)>0:
+            self.logger.error("query for the following time interavals failed:")
+            for tl in failed_tlims: self.logger.errors("%s %s"%(tl[0].iso, tl[1].iso))
+        return self.candidates
+
 
     def fetch_all_lightcurves(self):
         """Download all lightcurves that have not been downloaded previously.

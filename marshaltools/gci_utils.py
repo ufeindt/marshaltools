@@ -14,11 +14,10 @@ logging.basicConfig(level = logging.INFO)
 #logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-
 MARSHALL_BASE = 'http://skipper.caltech.edu:8080/cgi-bin/growth/'
 MARSHALL_SCRIPTS = (
                     'list_programs.cgi', 
-                    'list_candidates.cgi', 
+                    'list_candidates.cgi',
                     'list_program_sources.cgi',
                     'print_lc.cgi'
                     )
@@ -31,6 +30,17 @@ httpErrors = {
     500: 'Error 500: Internal Server Error: Something is broken.',
     503: 'Error 503: Service Unavailable.'
 }
+
+SCIENCEPROGRAM_IDS = {
+    'AMPEL Test'                                    : 42,
+    'Cosmology'                                     : 32,
+    'Gravitational Lenses'                          : 43,
+    'Correlating Icecube and ZTF'                   : 44,
+    'Electromagnetic Counterparts to Neutrinos'     : 25,
+    'Test Filter'                                   : 37,
+    'Redshift Completeness Factor'                  : 24,
+    'Weizmann Test Filter'                          : 45
+    }
 
 
 def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
@@ -50,7 +60,7 @@ def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
     # post request to the marshall
     logger.debug('Starting %s post'%(scriptname))
     r = requests.post(path, **request_kwargs)
-    logger.debug('request URL: %s'%r.url)
+    logger.debug('request URL: %s?%s'%(r.url, r.request.body))
     status = r.status_code
     if status != 200:
         try:
@@ -74,83 +84,42 @@ def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
     return rinfo
 
 
-
-def get_json_old(start_date, end_date, program_name, prog_id=None):
+def query_scanning_page(start_date, end_date, program_name, showsaved="selected", auth=None, logger=None):
     """
-        given dates as string YYYY-MM-DD hh:mm:ss and program name, 
-        get all the transients as a json file
-    """
-    
-    if prog_id is None:
-        prog_id = get_program_id(program_name)
-    
-    start = Time(start_date).datetime.strftime("%Y-%m-%d %H:%M:%S").replace(" ", "+").replace(":", "%3A")
-    end = Time(end_date).datetime.strftime("%Y-%m-%d %H:%M:%S").replace(" ", "+").replace(":", "%3A")
-    for date in [start, end]:
-        date=date.replace(" ", "+").replace(":", "%3A")
-    
-    query = "&startdate=%s&enddate=%s&scienceprogram=%d&nshow=200"%(start, end, prog_id)
-
-#    print("Getting URL: %s"%query)
-    url = list_candidates_url+'?'+query
-    return get(url)
-
-
-#def query_scanning_page(start_date, end_date, program_name, prog_id=None)
-
-
-def to_df(candid_json):
-    """
-        from candid_json to dataframe, selecting keys
-    """
-    my_keys = [
-        'classification', 'redshift', 'dec',  'field', 'ra', 'rb', 'rcid', 
-        'lastmodified', 'candid', 'can_be_saved_to', 'name', 'programid', 'creationdate']
-    
-    buff = []
-    for candid in candid_json:
-        skimmed = dict((k, candid.get(k)) for k in my_keys)
-        buff.append(skimmed)
-    return pd.DataFrame(buff)
-
-
-def iterative_get(start_date, end_date, program_name, prog_id=None, tstep=1*u.day):
-    """
-        get transient for program using time steps between start and end date
+        return the sources in the scanning page of the given program ingested in the
+        marshall between start_date and end_date.
     """
     
-    if prog_id is None:
-        prog_id = get_program_id(program_name)
+    # get the logger
+    logger = logger if not logger is None else logging.getLogger(__name__)
     
-    start, end = Time(start_date), Time(end_date)
-    times = np.arange(start, end, tstep).tolist()
-    times.append(end)
-    print("Getting scanned transient for program %s between %s and %s using dt: %.2f h"%
-        (program_name, start_date, end_date, tstep.to('hour').value))
-    df_list = []
-    for it in range(1, len(times)):
-        my_start, my_end = times[it-1], times[it]
-        partial_df = to_df(get_json(my_start.iso, my_end.iso, program_name, prog_id))
-#        print("got %d transients for program %s from %s to %s"%
-#            (len(partial_df), program_name, my_start.iso, my_end.iso))
-        if len(partial_df)>200:
-#            print("WARNING! reached hard limit on number of entries. Iterating.")
-            partial_df = iterative_get(my_start.iso, my_end.iso, program_name, prog_id, tstep=tstep/2.)
-        df_list.append(partial_df)
-    return df_list
-
-def get_all_scanned_transient(program_name, start_date, end_date, tstep=1*u.day):
+    # get scienceprogram number
+    scienceprogram = SCIENCEPROGRAM_IDS.get(program_name)
+    if scienceprogram is None:
+        raise KeyError("cannot find scienceprogram number corresponding to program %s. We have: %s"%
+            (program_name, repr(SCIENCEPROGRAM_IDS)))
     
-    prog_id = get_program_id(program_name)
-    df_list = iterative_get(start_date, end_date, program_name, prog_id, tstep)
+    # format dates to astropy.Time 
+    tstart = Time(start_date) if type(start_date) is str else start_date
+    tend   = Time(end_date) if type(end_date) is str else end_date
+    tstart = tstart.datetime.strftime("%Y-%m-%d %H:%M:%S")
+    tend   = tend.datetime.strftime("%Y-%m-%d %H:%M:%S")
+    logger.debug("querying scanning page of program %s (scienceprogram %d) for ingested times between %s and %s"%
+        (program_name, scienceprogram, tstart, tend))
     
-    df = pd.concat(df_list)
-    print("TOTAL: %d transients for program %s from %s to %s"%
-            (len(df), program_name, start_date, end_date))
-    out_name = "./dfs/scanned_%s_%s_%s.csv"%(program_name.replace(" ", ""), start_date, end_date)
-    df.to_csv(out_name, index=False)
-    print ("dataframe saved to %s"%out_name)
-    return df
-
-
+    # query and return sources as json
+    srcs = growthcgi(
+                    'list_candidates.cgi',
+                    logger=logger,
+                    auth=auth,
+                    data={
+                        'scienceprogram' : scienceprogram,
+                        'startdate'  : tstart,
+                        'enddate'    : tend,
+                        'showSaved'  : showsaved
+                        }
+                )
+    
+    logger.debug("retrieved %d sources"%len(srcs))
+    return srcs
 
