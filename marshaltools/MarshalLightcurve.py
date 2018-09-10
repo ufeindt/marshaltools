@@ -10,6 +10,7 @@ from astropy.table import Table
 
 from marshaltools import BaseTable
 from marshaltools.filters import _DEFAULT_FILTERS
+from marshaltools.gci_utils import growthcgi
 
 try:
     import sfdmap
@@ -56,16 +57,32 @@ class MarshalLightcurve(BaseTable):
                 self.mwebv = self.dustmap.ebv(ra, dec)
             else:
                 self.mwebv = 0.0
-            
-        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/print_lc.cgi',    #TODO: use gci_utils, add flag to not parse to json
-                          auth=(self.user, self.passwd),
-                          data={'name': self.name})
-        r = r.text.split('<table border=0 width=850>')[-1]
+        
+        # get the light curve into a table
+        r_text = growthcgi(
+                            'print_lc.cgi',
+                            to_json=False,
+                            logger=None,
+                            auth=(self.user, self.passwd),
+                            data={'name': self.name}
+                            )
+        r = r_text.split('<table border=0 width=850>')[-1]
         r = r.replace(' ', '').replace('\n', '')
         r = '\n'.join(r.split('<br>'))
-
         self.table_orig = Table.read(r, format='ascii.csv')
         self._remove_duplicates_()
+
+        
+        
+#        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/print_lc.cgi',    #TODO: use gci_utils, add flag to not parse to json
+#                          auth=(self.user, self.passwd),
+#                          data={'name': self.name})
+#        r = r.text.split('<table border=0 width=850>')[-1]
+#        r = r.replace(' ', '').replace('\n', '')
+#        r = '\n'.join(r.split('<br>'))
+
+#        self.table_orig = Table.read(r, format='ascii.csv')
+#        self._remove_duplicates_()
 
         # r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/view_source.cgi',
         #           auth=(self.user, self.passwd), 

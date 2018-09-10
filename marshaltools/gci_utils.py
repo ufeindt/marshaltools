@@ -19,7 +19,8 @@ MARSHALL_BASE = 'http://skipper.caltech.edu:8080/cgi-bin/growth/'
 MARSHALL_SCRIPTS = (
                     'list_programs.cgi', 
                     'list_candidates.cgi', 
-                    'list_program_sources.cgi'
+                    'list_program_sources.cgi',
+                    'print_lc.cgi'
                     )
 
 httpErrors = {
@@ -32,7 +33,7 @@ httpErrors = {
 }
 
 
-def growthcgi(scriptname, logger=None, **request_kwargs):
+def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
     """
     Run one of the growth cgi scripts, check results and return.
     """
@@ -56,17 +57,20 @@ def growthcgi(scriptname, logger=None, **request_kwargs):
             message = httpErrors[status]
         except KeyError as e:
             message = 'Error %d: Undocumented error'%status
-        logger.error(message)                                               #TODO: shall we raise the exception we catched?
+        logger.error(message)                                                   #TODO: shall we raise the exception we catched?
         return None
     logger.debug("Successful growth connection.")
     
     # parse result to JSON
-    try:
-        rinfo =  json.loads(r.text)
-    except ValueError as e:                                                 #TODO: shall we raise the exception we catched?
-        # No json information returned, usually the status most relevant
-        logger.error('No json returned: status %d' % status )
-        rinfo =  status
+    if to_json:
+        try:
+            rinfo =  json.loads(r.text)
+        except ValueError as e:                                                 #TODO: shall we raise the exception we catched?
+            # No json information returned, usually the status most relevant
+            logger.error('No json returned: status %d' % status )
+            rinfo =  status
+    else:
+        rinfo = r.text
     return rinfo
 
 
