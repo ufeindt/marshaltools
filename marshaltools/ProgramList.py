@@ -38,7 +38,7 @@ class ProgramList(BaseTable):
     """
 
 
-    def __init__(self, program, sfd_dir=None, logger=None, **kwargs):
+    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
@@ -53,9 +53,26 @@ class ProgramList(BaseTable):
         self.logger.info("Initialized ProgramList for program %s (ID %d)"%(self.program, self.programidx))
         
         # now load all the saved sources
-        self.get_saved_sources()
+        if load_sources:
+            self.get_saved_sources()
+        if load_candidates:
+            self.get_candidates()
         self.lightcurves = None
-        self.candidates = []            # candidates sources from the scanning page
+        self.candidates = {}            # candidates sources from the scanning page
+
+
+## TODO:
+##      - change the name to MarshalProgram?
+##      - retrieve / post annotations for source
+##      - ingest avro ID
+
+
+# from the sergeant we can scrape:
+# add_avro_id(self, avroid):
+
+# get/post annotations
+
+# get/post comments
 
 
     def _list_programids(self):
@@ -180,7 +197,7 @@ class ProgramList(BaseTable):
             candids = self.query_candidate_page(tlim[0], tlim[1])
             return candids
 
-        self.candidates = []
+        candidates = []
         failed_tlims = []
         with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
             jobs = {
@@ -189,9 +206,9 @@ class ProgramList(BaseTable):
                 tlim = jobs[job]
                 try:
                     candids = job.result()
-                    self.candidates+=candids
+                    candidates+=candids
                     self.logger.debug("query from %s to %s returned %d candidates. Total: %d"%
-                        (tlim[0].iso, tlim[1].iso, len(candids), len(self.candidates)))
+                        (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
                 except Exception as e:
                     self.logger.error("query from %s to %s generated an exception"%
                         (tlim[0].iso, tlim[1].iso))
@@ -201,14 +218,41 @@ class ProgramList(BaseTable):
         if len(failed_tlims)>0:
             self.logger.error("query for the following time interavals failed:")
             for tl in failed_tlims: self.logger.errors("%s %s"%(tl[0].iso, tl[1].iso))
+        
+        # turn the candidate list into a dictionary
+        self.candidates = {s['name']:s for s in candidates}
         return self.candidates
 
 
     def fetch_all_lightcurves(self):
-        """Download all lightcurves that have not been downloaded previously.
+        """
+            Download all lightcurves that have not been downloaded previously.
         """
         for name in self.sources.keys():
             self.get_lightcurve(name)
+
+
+    def get_source(self, name, include_candidates=True):
+        """
+            return the desired source from the sources belonging to this
+            program. If not found in the saved sources, it will look among
+            the candidates from the scanning page
+        """
+        src = self.sources.get(name)
+        if src is None:
+            self.logger.debug("can't find source named %s among saved sources of program %s"%
+                (name, self.program))
+            if include_candidates:
+                src = self.candidates.get(name)
+                if src is None:
+                    self.logger.debug("can't find it among candidates either.")
+                else:
+                    self.logger.debug("found source %s among candidates of program %s"%
+                        (name, self.program))
+        else:
+            self.logger.debug("found source %s among saved sources of program %s"%
+                (name, self.program))
+        return src
 
 
     def get_lightcurve(self, name):

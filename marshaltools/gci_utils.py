@@ -10,8 +10,8 @@ import astropy.units as u
 
 import logging
 logging.basicConfig(level = logging.INFO)
-#logging.getLogger("requests").setLevel(logging.WARNING)
-#logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 MARSHALL_BASE = 'http://skipper.caltech.edu:8080/cgi-bin/growth/'
@@ -57,7 +57,7 @@ def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
             (scriptname, ", ".join(MARSHALL_SCRIPTS)))
     path = os.path.join(MARSHALL_BASE, scriptname)
     
-    # post request to the marshall
+    # post request to the marshall      #TODO: make several attempts
     logger.debug('Starting %s post'%(scriptname))
     r = requests.post(path, **request_kwargs)
     logger.debug('request URL: %s?%s'%(r.url, r.request.body))
