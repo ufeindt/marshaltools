@@ -9,7 +9,7 @@ from astropy.time import Time
 import astropy.units as u
 
 import logging
-logging.basicConfig()#level = logging.DEBUG)
+logging.basicConfig(level = logging.DEBUG)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -19,6 +19,7 @@ MARSHALL_SCRIPTS = (
                     'list_programs.cgi', 
                     'list_candidates.cgi',
                     'list_program_sources.cgi',
+                    'source_summary.cgi',
                     'print_lc.cgi'
                     )
 

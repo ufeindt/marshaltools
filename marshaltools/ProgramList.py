@@ -130,6 +130,70 @@ class ProgramList(BaseTable):
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
 
 
+    def source_summary(self, name, append=False, refresh=False):
+        """
+            look for the source summary information for the given source, if not
+            present, get it via the source_summary cgi script. 
+            
+            Parameters:
+            -----------
+            
+                name: `str`
+                    ZTF name of source
+                
+                append: `bool`
+                    if True and the source is present in this program's saved sources list, 
+                    the information returned by this script is added to the source.
+                
+                refresh: `bool`
+                    if True
+            
+            Returns:
+            --------
+                
+                dict with source_summary.gci command output
+        """
+        
+        # see if the source is among the saved ones
+        src = self.sources.get(name)
+        if not src is None:
+            
+            # see if it has a summary already
+            summary = src.get('summary')
+            
+            # if not or if you want to update it, execute the script
+            if summary is None or refresh:
+                summary = growthcgi(
+                        'source_summary.cgi',
+                        logger=self.logger,
+                        auth=(self.user, self.passwd),
+                        data={'sourceid' : src['id']},
+                        )
+                self.logger.debug("got source summary for source %s."%name)
+                
+                # eventually append
+                if append:
+                    src['summary'] = summary
+        else:
+            self.logger.debug("can't find source %s in the saved sources of program %s"%
+                (name, self.program))
+            summary = None
+        return summary
+
+
+    def get_summaries(self, refresh=False):
+        """
+            get the summaries for all the saved sources and add them to the
+            list of saved sources.
+        """
+        
+        # TODO: make it parallel!
+        
+        self.logger.info("downloading the summaries for all the saved sources.")
+        for src_name in self.sources:
+            self.source_summary(src_name, append=True, refresh=refresh)
+        
+
     def query_candidate_page(self, showsaved, start_date=None, end_date=None):
         """
             query scanning page for sources ingested in a given time range.
