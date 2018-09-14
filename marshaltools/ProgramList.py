@@ -1,0 +1,407 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# class to store all sources belonging to a program in the Growth marhsall.
+#
+
+
+import requests, json, os, time
+import numpy as np
+from astropy.table import Table
+from astropy.time import Time
+import astropy.units as u
+import concurrent.futures
+
+import logging
+logging.basicConfig(level = logging.INFO)
+
+from marshaltools import BaseTable
+from marshaltools import MarshalLightcurve
+from marshaltools import SurveyFields, ZTFFields
+from marshaltools.gci_utils import growthcgi, query_scanning_page
+from marshaltools.filters import _DEFAULT_FILTERS
+
+
+class ProgramList(BaseTable):
+    """Class to list all sources in one of your science programs in 
+    the marshal.
+    Arguments:
+    program -- name of the science program you are looking for (case-sensitive)
+    Options:
+    user        -- Marshal username (overrides loading the name from file)
+    passwd      -- Marshal password (overrides loading the name from file)
+    filter_dict -- dictionary to assign the sncosmo bandpasses to combinations
+                   of instrument and filter columns. This is only needed if there 
+                   is non-P48 photometry. Keys are tuples of telescope+intrument 
+                   and filter, values are the sncosmo bandpass names, 
+                   see _DEFAULT_FILTERS for an example.
+    """
+
+
+    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, **kwargs):
+        """
+        """
+        kwargs = self._load_config_(**kwargs)
+        
+        self.logger = logger if not logger is None else logging.getLogger(__name__)
+        self.program = program
+        self.sfd_dir = sfd_dir
+        self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
+        
+        # look for the corresponding program id
+        self.get_programidx()
+        self.logger.info("Initialized ProgramList for program %s (ID %d)"%(self.program, self.programidx))
+        
+        # now load all the saved sources
+        if load_sources:
+            self.get_saved_sources()
+        if load_candidates:
+            self.get_candidates()
+        self.lightcurves = None
+        self.candidates = {}            # candidates sources from the scanning page
+
+
+## TODO:
+##      - change the name to MarshalProgram?
+##      - retrieve / post annotations for source
+##      - ingest avro ID
+
+
+# from the sergeant we can scrape:
+# add_avro_id(self, avroid):
+
+# get/post annotations
+
+# get/post comments
+
+
+    def _list_programids(self):
+        """
+        get a list of all the programs the user is member of.
+        """
+        if not hasattr(self, 'program_list'):
+            self.logger.debug("listing accessible programs")
+            self.program_list = growthcgi('list_programs.cgi', logger=self.logger, auth=(self.user, self.passwd))
+
+
+    def get_programidx(self):
+        """
+            assign the programID to this program
+        """
+        self.programidx = -1
+        self._list_programids()
+        for index, program in enumerate(self.program_list):
+            if program['name'] == self.program:
+                self.programidx = program['programidx']
+        if self.programidx == -1:
+            raise ValueError('Could not find program "%s". You are member of: %s'%(
+                self.program, ', '.join([p['name'] for p in self.program_list])
+            ))
+
+
+    def get_saved_sources(self):
+        """
+            get all saved sources for this program
+        """
+        
+        # execute request 
+        s_tmp = growthcgi(
+            'list_program_sources.cgi',
+            logger=self.logger,
+            auth=(self.user, self.passwd),
+            data={
+                'programidx': self.programidx,
+                'getredshift': 1,
+                'getclassification': 1,
+                }
+            )
+        
+        # now parse the json file into a dictionary of sources
+        self.sources = {s_['name']: s_ for s_ in s_tmp}
+        
+        # assign field and ccd value depending on position
+        sf = ZTFFields()
+        ra_ = np.array([v_['ra'] for v_ in self.sources.values()])
+        dec_ = np.array([v_['dec'] for v_ in self.sources.values()])
+        fields_ = sf.coord2field(ra_, dec_)
+        for name, f_, c_ in zip(self.sources.keys(), fields_['field'], fields_['ccd']):
+            self.sources[name]['fields'] = f_
+            self.sources[name]['ccds'] = c_
+        self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
+
+
+    def query_candidate_page(self, showsaved, start_date=None, end_date=None):
+        """
+            query scanning page for sources ingested in a given time range.
+            
+        """
+        
+        if start_date is None:
+            start_date = "2018-03-01 00:00:00"
+        if end_date is None:
+            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        return query_scanning_page(
+                                    start_date, 
+                                    end_date,
+                                    program_name=self.program,
+                                    showsaved=showsaved,
+                                    auth=(self.user, self.passwd),
+                                    logger=self.logger)
+
+
+    def get_candidates(self, showsaved="all", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
+        """
+            download the list fo the sources in the scanning page of this program.
+            
+            Parameters:
+            -----------
+                
+                showsaved: `str`
+                    weather or not to include previously saved candidates. Possible options are:
+                        * None ?
+                        * 'selected'
+                        * 'notSelected' ?
+                        * 'onlySelected' ?
+                        * 'onlyNotSelected' ?
+                        * 'all' ?
+                
+                trange: `list` or `tuple` or None
+                    time constraints for the query in the form of (start_date, end_date). The
+                    two elements of tis list can be either strings or astropy.time.Time objects.
+                    
+                    if None, all the sources in the scanning page are retrieved slicing the 
+                    query in smaller time steps. Since the marhsall returns at max 200 candidates
+                    per query, if tis limit is reached, the time range of the query is 
+                    subdivided iteratively.
+                
+                tstep: `astropy.quantity`
+                    time step to use to splice the query.
+                
+                nworkers: `int`
+                    number of threads in the pool that are used to download the stuff.
+                
+                max_attemps: `int`
+                    this function will re-iterate the download on the jobs that fails until
+                    complete success or until the maximum number of attemps is reaced.
+                
+                raise_on_fail: `bool`
+                    if after the max_attemps is reached, there are still failed jobs, the
+                    function will raise and exception if raise_on_fail is True, else it 
+                    will simply throw a warning.
+        """
+        
+        
+        # parse time limts
+        if not trange is None:
+            start_date = trange[0]
+            end_date   = trange[1]
+        else:
+            start_date = "2018-03-01 00:00:00"
+            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # subdivide the query in time steps
+        start, end = Time(start_date), Time(end_date)
+        times = np.arange(start, end, tstep).tolist()
+        times.append(end)
+        self.logger.info("Getting scanning page transient for program %s between %s and %s using dt: %.2f h"%
+                (self.program, start_date, end_date, tstep.to('hour').value))
+        
+        # create list of time bounds
+        tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
+        
+        # utility functions for multiprocessing
+        def download_candidates(tlim):
+            candids = self.query_candidate_page(showsaved, tlim[0], tlim[1])
+            return candids
+        
+        def threaded_downloads(todo_tlims, candidates):
+            """
+                download the sources for specified tlims and keep track of what you've done
+            """
+            
+            n_total, n_failed = len(todo_tlims), 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+                
+                jobs = {
+                    executor.submit(download_candidates, tlim): tlim for tlim in todo_tlims}
+                
+                # inspect completed jobs
+                for job in concurrent.futures.as_completed(jobs):
+                    tlim = jobs[job]
+                    
+                    # inspect job result
+                    try:
+                        # collect all the results
+                        candids = job.result()
+                        candidates += candids
+                        self.logger.debug("Query from %s to %s returned %d candidates. Total: %d"%
+                            (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
+                        # if job is successful, remove the tlim from the todo list
+                        todo_tlims.remove(tlim)
+                        
+                    except Exception as e:
+                        self.logger.error("Query from %s to %s generated an exception %s"%
+                            (tlim[0].iso, tlim[1].iso, repr(e)))
+                        n_failed+=1
+            
+            # print some info
+            self.logger.info("jobs are done: total %d, failed: %d"%(n_total, n_failed))
+            
+            
+        # loop through the list of time limits and spread across multiple threads
+        start = time.time()
+        candidates = []                         # here you collect sources you've successfully downloaded
+        n_try, todo_tlims = 0, tlims            # here you keep track of what is done and what is still to be done
+        while len(todo_tlims)>0 and n_try<max_attemps:
+            self.logger.info("Downloading candidates. Iteration number %d: %d jobs to do"%
+                (n_try, len(todo_tlims)))
+            threaded_downloads(todo_tlims, candidates)
+            n_try+=1
+        end = time.time()
+        
+        # notify if it's still not enough
+        if len(todo_tlims)>0:
+            mssg = "Query for the following time interavals failed:\n"
+            for tl in todo_tlims: mssg += "%s %s\n"%(tl[0].iso, tl[1].iso)
+            if raise_on_fail:
+                raise RuntimeError(mssg)
+            else:
+                self.logger.error(mssg)
+        
+        # check for duplicates
+        names = [s['name'] for s in candidates]
+        if len(set(names)) != len(names):
+            self.logger.warning("Duplicate candidates!")
+        
+        # turn the candidate list into a dictionary
+        self.candidates = {s['name']:s for s in candidates}
+        self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
+        return self.candidates
+
+
+    def fetch_all_lightcurves(self):
+        """
+            Download all lightcurves that have not been downloaded previously.
+        """
+        for name in self.sources.keys():
+            self.get_lightcurve(name)
+
+
+    def get_source(self, name, include_candidates=True):
+        """
+            return the desired source from the sources belonging to this
+            program. If not found in the saved sources, it will look among
+            the candidates from the scanning page
+        """
+        src = self.sources.get(name)
+        if src is None:
+            self.logger.debug("can't find source named %s among saved sources of program %s"%
+                (name, self.program))
+            if include_candidates:
+                src = self.candidates.get(name)
+                if src is None:
+                    self.logger.debug("can't find it among candidates either.")
+                else:
+                    self.logger.debug("found source %s among candidates of program %s"%
+                        (name, self.program))
+        else:
+            self.logger.debug("found source %s among saved sources of program %s"%
+                (name, self.program))
+        return src
+
+
+    def get_lightcurve(self, name):
+        """Download the lightcurve for a source in the program. 
+        Other sources will not be downloaded.
+        Arguments:
+        name -- source name in the GROWTH marshal
+        """
+        if name not in self.sources.keys():
+            raise ValueError('Unknown transient name: %s'%name)
+
+        if self.lightcurves is None:
+            self.lightcurves = {}
+
+        if name not in self.lightcurves.keys():
+            lc = MarshalLightcurve(
+                name, ra=self.sources[name]['ra'], dec=self.sources[name]['dec'],
+                redshift=self.sources[name]['redshift'],
+                classification=self.sources[name]['classification'],
+                filter_dict = self.filter_dict, sfd_dir=self.sfd_dir
+            )
+            self.lightcurves[name] = lc
+        else:
+            lc = self.lightcurves[name]
+        return lc
+
+
+    def download_spec(self, name, filename):
+        """Download all spectra for a source in the marshal as a tar.gz file
+        
+        Arguments:
+        name     -- source name in the GROWTH marshal
+        filename -- filename for saving the archive
+        """
+        if name not in self.sources.keys():
+            raise ValueError('Unknown transient name: %s'%name)
+
+        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/batch_spec.cgi',
+                          stream=True,
+                          auth=(self.user, self.passwd), 
+                          data={'name': name})
+        r.raise_for_status()
+
+        if r.text.startswith('No spectrum'):
+            raise ValueError(r.text)
+        else:
+            with open(filename, 'wb') as handle:
+                for block in r.iter_content(1024):
+                    handle.write(block)
+
+
+    def check_spec(self, name):
+        """Check if spectra for an object are available
+        
+        Arguments:
+        name     -- source name in the GROWTH marshal
+        filename -- filename for saving the archive
+        """
+        if name not in self.sources.keys():
+            raise ValueError('Unknown transient name: %s'%name)
+
+        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/batch_spec.cgi',
+                          stream=True,
+                          auth=(self.user, self.passwd), 
+                          data={'name': name})
+        r.raise_for_status()
+
+        if r.text.startswith('No spectrum'):
+            return 0
+        else:
+            return 1
+
+
+    def download_all_specs(self, download_path=''):
+        """Download all spectra for the science program. 
+        (Will not create a file for sources without spectra)
+        Options:
+        download_path -- directory where to save the archives
+        """
+        if not os.path.exists(download_path):
+            os.makedirs(download_path)
+        
+        for name in self.sources.keys():
+            try:
+                self.download_spec(name, os.path.join(download_path, name+'.tar.gz'))
+            except ValueError:
+                pass
+
+
+    @property
+    def table(self):
+        """Table of source names, RA and Dec (redshift and classification will be added soon) """
+        names = [s['name'] for s in self.sources.values()]
+        ra = [s['ra'] for s in self.sources.values()]
+        dec = [s['dec'] for s in self.sources.values()]
+        return Table(data=[names, ra, dec], names=['name', 'ra', 'dec'])
