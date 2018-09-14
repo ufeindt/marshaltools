@@ -9,7 +9,7 @@ from astropy.time import Time
 import astropy.units as u
 
 import logging
-logging.basicConfig(level = logging.INFO)
+logging.basicConfig()#level = logging.DEBUG)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -43,7 +43,7 @@ SCIENCEPROGRAM_IDS = {
     }
 
 
-def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
+def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kwargs):
     """
     Run one of the growth cgi scripts, check results and return.
     """
@@ -57,25 +57,38 @@ def growthcgi(scriptname, to_json=True, logger=None, **request_kwargs):
             (scriptname, ", ".join(MARSHALL_SCRIPTS)))
     path = os.path.join(MARSHALL_BASE, scriptname)
     
-    # post request to the marshall      #TODO: make several attempts
-    logger.debug('Starting %s post'%(scriptname))
-    r = requests.post(path, **request_kwargs)
-    logger.debug('request URL: %s?%s'%(r.url, r.request.body))
-    status = r.status_code
-    if status != 200:
-        try:
-            message = httpErrors[status]
-        except KeyError as e:
-            message = 'Error %d: Undocumented error'%status
-        logger.error(message)                                                   #TODO: shall we raise the exception we catched?
+    # post request to the marshall making several attemps
+    n_try, success = 0, False
+    while n_try<max_attemps:
+        logger.debug('Starting %s post. Attempt # %d'%(scriptname, n_try))
+        
+        # set timeout from kwargs or use default
+        timeout = request_kwargs.pop('timeout', 30) + (60*n_try-1)
+        
+        # post the request
+        r = requests.post(path, timeout=timeout, **request_kwargs)
+        logger.debug('request URL: %s?%s'%(r.url, r.request.body))
+        status = r.status_code
+        if status != 200:
+            try:
+                message = httpErrors[status]
+            except KeyError as e:
+                message = 'Error %d: Undocumented error'%status
+            logger.error(message)
+            input()
+        logger.debug("Successful growth connection.")
+        success = True
+        break
+    
+    if not success:
+        self.logger.error("Failure despite %d attemps!"%max_attemps)
         return None
-    logger.debug("Successful growth connection.")
     
     # parse result to JSON
     if to_json:
         try:
             rinfo =  json.loads(r.text)
-        except ValueError as e:                                                 #TODO: shall we raise the exception we catched?
+        except ValueError as e:
             # No json information returned, usually the status most relevant
             logger.error('No json returned: status %d' % status )
             rinfo =  status

@@ -5,7 +5,7 @@
 #
 
 
-import requests, json, os
+import requests, json, os, time
 import numpy as np
 from astropy.table import Table
 from astropy.time import Time
@@ -130,9 +130,10 @@ class ProgramList(BaseTable):
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
 
 
-    def query_candidate_page(self, start_date=None, end_date=None, showsaved="selected"):
+    def query_candidate_page(self, showsaved, start_date=None, end_date=None):
         """
             query scanning page for sources ingested in a given time range.
+            
         """
         
         if start_date is None:
@@ -149,13 +150,21 @@ class ProgramList(BaseTable):
                                     logger=self.logger)
 
 
-    def get_candidates(self, trange=None, tstep=5*u.day, nworkers=12):
+    def get_candidates(self, showsaved="all", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
         """
             download the list fo the sources in the scanning page of this program.
             
             Parameters:
             -----------
                 
+                showsaved: `str`
+                    weather or not to include previously saved candidates. Possible options are:
+                        * None ?
+                        * 'selected'
+                        * 'notSelected' ?
+                        * 'onlySelected' ?
+                        * 'onlyNotSelected' ?
+                        * 'all' ?
                 
                 trange: `list` or `tuple` or None
                     time constraints for the query in the form of (start_date, end_date). The
@@ -169,8 +178,17 @@ class ProgramList(BaseTable):
                 tstep: `astropy.quantity`
                     time step to use to splice the query.
                 
-                iteration: `bool`
-                    distinguis subcalls from the parent 'get_all' one.
+                nworkers: `int`
+                    number of threads in the pool that are used to download the stuff.
+                
+                max_attemps: `int`
+                    this function will re-iterate the download on the jobs that fails until
+                    complete success or until the maximum number of attemps is reaced.
+                
+                raise_on_fail: `bool`
+                    if after the max_attemps is reached, there are still failed jobs, the
+                    function will raise and exception if raise_on_fail is True, else it 
+                    will simply throw a warning.
         """
         
         
@@ -192,35 +210,73 @@ class ProgramList(BaseTable):
         # create list of time bounds
         tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
         
-        # wrap function for multiprocessing
+        # utility functions for multiprocessing
         def download_candidates(tlim):
-            candids = self.query_candidate_page(tlim[0], tlim[1])
+            candids = self.query_candidate_page(showsaved, tlim[0], tlim[1])
             return candids
-
-        candidates = []
-        failed_tlims = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
-            jobs = {
-                executor.submit(download_candidates, tlim): tlim for tlim in tlims}
-            for job in concurrent.futures.as_completed(jobs):
-                tlim = jobs[job]
-                try:
-                    candids = job.result()
-                    candidates+=candids
-                    self.logger.debug("query from %s to %s returned %d candidates. Total: %d"%
-                        (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
-                except Exception as e:
-                    self.logger.error("query from %s to %s generated an exception"%
-                        (tlim[0].iso, tlim[1].iso))
-                    self.logger(e)
-                    failed_tlims.append(tlim)
-        self.logger.info("download of candidates complete.")
-        if len(failed_tlims)>0:
-            self.logger.error("query for the following time interavals failed:")
-            for tl in failed_tlims: self.logger.errors("%s %s"%(tl[0].iso, tl[1].iso))
+        
+        def threaded_downloads(todo_tlims, candidates):
+            """
+                download the sources for specified tlims and keep track of what you've done
+            """
+            
+            n_total, n_failed = len(todo_tlims), 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+                
+                jobs = {
+                    executor.submit(download_candidates, tlim): tlim for tlim in todo_tlims}
+                
+                # inspect completed jobs
+                for job in concurrent.futures.as_completed(jobs):
+                    tlim = jobs[job]
+                    
+                    # inspect job result
+                    try:
+                        # collect all the results
+                        candids = job.result()
+                        candidates += candids
+                        self.logger.debug("Query from %s to %s returned %d candidates. Total: %d"%
+                            (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
+                        # if job is successful, remove the tlim from the todo list
+                        todo_tlims.remove(tlim)
+                        
+                    except Exception as e:
+                        self.logger.error("Query from %s to %s generated an exception %s"%
+                            (tlim[0].iso, tlim[1].iso, repr(e)))
+                        n_failed+=1
+            
+            # print some info
+            self.logger.info("jobs are done: total %d, failed: %d"%(n_total, n_failed))
+            
+            
+        # loop through the list of time limits and spread across multiple threads
+        start = time.time()
+        candidates = []                         # here you collect sources you've successfully downloaded
+        n_try, todo_tlims = 0, tlims            # here you keep track of what is done and what is still to be done
+        while len(todo_tlims)>0 and n_try<max_attemps:
+            self.logger.info("Downloading candidates. Iteration number %d: %d jobs to do"%
+                (n_try, len(todo_tlims)))
+            threaded_downloads(todo_tlims, candidates)
+            n_try+=1
+        end = time.time()
+        
+        # notify if it's still not enough
+        if len(todo_tlims)>0:
+            mssg = "Query for the following time interavals failed:\n"
+            for tl in todo_tlims: mssg += "%s %s\n"%(tl[0].iso, tl[1].iso)
+            if raise_on_fail:
+                raise RuntimeError(mssg)
+            else:
+                self.logger.error(mssg)
+        
+        # check for duplicates
+        names = [s['name'] for s in candidates]
+        if len(set(names)) != len(names):
+            self.logger.warning("Duplicate candidates!")
         
         # turn the candidate list into a dictionary
         self.candidates = {s['name']:s for s in candidates}
+        self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
         return self.candidates
 
 
