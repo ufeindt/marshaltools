@@ -12,8 +12,12 @@ for k, v in summ.items():
         print (k, ":", v)
 
 # first you download them
-#prog.get_summaries()
+start = time.time()
+prog.get_summaries()
+print ("took %.2e sec"%(time.time()-start))
+
+input("press enter to re-read the summaries. This time it will be fast")
 
 ## second time, you simply read them
-#prog.get_summaries()
+prog.get_summaries()
 

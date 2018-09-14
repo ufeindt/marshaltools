@@ -130,6 +130,17 @@ class ProgramList(BaseTable):
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
 
 
+    def get_source(self, name):
+        """
+            return desired source from the saved ones
+        """
+        src = self.sources.get(name)
+        if src is None:
+             self.logger.debug("can't find source %s in the saved sources of program %s"%
+                (name, self.program))
+        return src
+
+
     def source_summary(self, name, append=False, refresh=False):
         """
             look for the source summary information for the given source, if not
@@ -155,7 +166,7 @@ class ProgramList(BaseTable):
         """
         
         # see if the source is among the saved ones
-        src = self.sources.get(name)
+        src = self.get_source(name)
         if not src is None:
             
             # see if it has a summary already
@@ -175,24 +186,54 @@ class ProgramList(BaseTable):
                 if append:
                     src['summary'] = summary
         else:
-            self.logger.debug("can't find source %s in the saved sources of program %s"%
-                (name, self.program))
             summary = None
         return summary
 
 
-    def get_summaries(self, refresh=False):
+    def get_src_key(self, name, keys):
+        """
+            read the desired key(s) for the requested source.
+        """
+        src = self.get_source(name)
+        if src is None:
+            return None
+        print (src)
+        # keys can be a list
+        if type(keys) is str:
+            keys = [keys]
+        out = {}
+        for k in keys:
+            # look in the source dict or in the summary
+            val = src.get(k)
+            if val is None:
+                val = src.get('summary', {}).get(k)
+            out[k]=val
+        return out
+
+    def get_summaries(self, refresh=False, nworkers=24):
         """
             get the summaries for all the saved sources and add them to the
             list of saved sources.
         """
         
-        # TODO: make it parallel!
-        
-        self.logger.info("downloading the summaries for all the saved sources.")
-        for src_name in self.sources:
+        def dowload_summary(src_name):
             self.source_summary(src_name, append=True, refresh=refresh)
         
+        with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+                jobs = {
+                    executor.submit(dowload_summary, src): src for src in self.sources}
+                # inspect completed jobs
+                for job in concurrent.futures.as_completed(jobs):
+                    src_name = jobs[job]
+                    # inspect job result
+                    try:
+                        # collect all the results
+                        summ = job.result()
+                        self.logger.debug("succesfully retrievd summary for source %s"%src_name)
+                    except Exception as e:
+                        self.logger.error("can't find summary for source %s"%src_name)
+        self.logger.info("downloaded the summaries for all the saved sources.")
+
 
     def query_candidate_page(self, showsaved, start_date=None, end_date=None):
         """
