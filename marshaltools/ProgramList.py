@@ -393,7 +393,7 @@ class ProgramList(BaseTable):
             self.get_lightcurve(name)
 
 
-    def get_source(self, name, include_candidates=True):
+    def find_source(self, name, include_candidates=True):
         """
             return the desired source from the sources belonging to this
             program. If not found in the saved sources, it will look among
@@ -403,7 +403,7 @@ class ProgramList(BaseTable):
         if src is None:
             self.logger.debug("can't find source named %s among saved sources of program %s"%
                 (name, self.program))
-            if include_candidates:
+            if include_candidates and hasattr(self, 'candidates'):
                 src = self.candidates.get(name)
                 if src is None:
                     self.logger.debug("can't find it among candidates either.")
