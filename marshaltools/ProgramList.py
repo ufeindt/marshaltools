@@ -21,8 +21,6 @@ from marshaltools import SurveyFields, ZTFFields
 from marshaltools.gci_utils import growthcgi, query_scanning_page
 from marshaltools.filters import _DEFAULT_FILTERS
 
-
-
 def retrieve(in_dict, key, default=None):
     """
         modified dict.get method that allows to traverse
@@ -77,8 +75,6 @@ def retrieve(in_dict, key, default=None):
             return default
 
 
-
-
 class ProgramList(BaseTable):
     """Class to list all sources in one of your science programs in 
     the marshal.
@@ -93,7 +89,6 @@ class ProgramList(BaseTable):
                    and filter, values are the sncosmo bandpass names, 
                    see _DEFAULT_FILTERS for an example.
     """
-
 
     def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, **kwargs):
         """
@@ -210,7 +205,7 @@ class ProgramList(BaseTable):
             -----------
             
                 name: `str`
-                    ZTF name of source
+                    ZTF name of source.
                 
                 append: `bool`
                     if True and the source is present in this program's saved sources list, 
@@ -225,9 +220,20 @@ class ProgramList(BaseTable):
                 dict with source_summary.gci command output
         """
         
-        # see if the source is among the saved ones
-        src = self.get_source(name)
+        # get the source, either from the saved or from the candidates
+        src = self.find_source(name)
         if not src is None:
+            
+            # figure out which key contains the id
+            if self.sources.get(name) is None:
+                src_id = src.get('sourceId')
+            else:
+                src_id = src.get('id')
+            if src_id is None:
+                self.logger.warning(
+                    "Unable to retrieve summary. '_id' or 'sourceId' not in src dictionary. Keys are: %s"%
+                        (repr(src.keys())))
+                return {}
             
             # see if it has a summary already
             summary = src.get('summary')
@@ -238,9 +244,12 @@ class ProgramList(BaseTable):
                         'source_summary.cgi',
                         logger=self.logger,
                         auth=(self.user, self.passwd),
-                        data={'sourceid' : src['id']},
+                        data={'sourceid' : src_id},
                         )
-                self.logger.debug("got source summary for source %s."%name)
+                if summary == {}:
+                    self.logger.warning("source %s has no summary"%(name))
+                else:
+                    self.logger.debug("got source summary for source %s."%name)
                 
                 # eventually append
                 if append:
@@ -250,7 +259,7 @@ class ProgramList(BaseTable):
         return summary
 
 
-    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True):
+    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True, include_candidates=True):
         """
             read the desired key(s) for the requested source. Use retrieve to 
             support dotted notations to traverse nested dictionaries. 
@@ -267,7 +276,7 @@ class ProgramList(BaseTable):
         
         # get the source (if no dictionary has been given, look for it)
         if src_dict is None:
-            src = self.get_source(name)
+            src = self.find_source(name, include_candidates)
         else:
             src = src_dict
         if src is None:
@@ -286,8 +295,13 @@ class ProgramList(BaseTable):
             val = retrieve(src, k, 666)
             if val == 666:
                 summary = self.source_summary(name, append=append_summary)
-                val = retrieve(summary, k, 666)
-            
+                
+                # check for no summary on the marhsall, unknown source, or missing 'id' key
+                if summary == {} or summary is None:
+                    val = default
+                else:
+                    val = retrieve(summary, k, 666)
+                
             # output warning
             if val == 666:
                 self.logger.warning(
@@ -471,7 +485,7 @@ class ProgramList(BaseTable):
         # turn the candidate list into a dictionary
         self.candidates = {s['name']:s for s in candidates}
         self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
-#        return self.candidates
+        return self.candidates
 
 
     def fetch_all_lightcurves(self):
