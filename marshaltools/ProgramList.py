@@ -22,6 +22,63 @@ from marshaltools.gci_utils import growthcgi, query_scanning_page
 from marshaltools.filters import _DEFAULT_FILTERS
 
 
+
+def retrieve(in_dict, key, default=None):
+    """
+        modified dict.get method that allows to traverse
+        nested dictionaries using a dotted notation and supports
+        going though lists as well.
+        
+        Parameters:
+        -----------
+        
+        in_dict: `dict`
+            possibly complex dictionary
+        
+        key: `str`
+            what to look for
+        
+        default:
+            what to return if the key is not found
+
+        Eg:
+
+        dd = {
+            'a': 1,
+            'b': {
+                'x': 10,
+                'y': 11, 
+                'z': {'l': 100, 'm': 101}
+                },
+            'z': [{'e': 200, 'f': 201}, {'e': 201, 'f': 202}],
+            'c': 3
+            }
+
+        retrieve(dd, a) = 1
+        retrieve(dd, 'b.y') = 11
+        retrieve(dd, 'b.w', 'fuffa') = 'fuffa'
+        retrieve(dd, 'b.z.m') = 101
+        retrieve(dd, 'z.e') = [200, 201]
+    """
+    
+    if not '.' in key:
+        return in_dict.get(key, default)
+    
+    for k in key.split('.'):
+        out = in_dict.get(k, default)
+        klist = key.split('.')
+        klist.remove(k)
+        new_key = ".".join(klist)
+        if type(out) == dict:
+            return retrieve(out, new_key, default)
+        elif type(out) in [tuple, list]:
+            return [retrieve(x, new_key, default) for x in out]
+        elif out == default:
+            return default
+
+
+
+
 class ProgramList(BaseTable):
     """Class to list all sources in one of your science programs in 
     the marshal.
@@ -134,6 +191,10 @@ class ProgramList(BaseTable):
         """
             return desired source from the saved ones
         """
+        
+        if not hasattr(self, 'sources'):
+            raise RuntimeError("no sources loaded for program %s."%self.program)
+        
         src = self.sources.get(name)
         if src is None:
              self.logger.debug("can't find source %s in the saved sources of program %s"%
@@ -190,25 +251,54 @@ class ProgramList(BaseTable):
         return summary
 
 
-    def get_src_key(self, name, keys):
+    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True):
         """
-            read the desired key(s) for the requested source.
+            read the desired key(s) for the requested source. Use retrieve to 
+            support dotted notations to traverse nested dictionaries. 
+            
+            e.g. key=='annotations.username' returns a list of all the usernames
+            found in the annotation list of dictionaries of the summary.
+            
+            See docstring
+            of retrieve function at the top of this module.
+            
+            to be compatible with the candidates as well, one can use the src parameter
+            to pass a 'source-like' dictionary to the function. This will overwrite the name.
         """
-        src = self.get_source(name)
+        
+        # get the source (if no dictionary has been given, look for it)
+        if src_dict is None:
+            src = self.get_source(name)
+        else:
+            src = src_dict
         if src is None:
-            return None
-        print (src)
+            return default
+        
         # keys can be a list
         if type(keys) is str:
             keys = [keys]
+        
+        # loop trough the keys and get their values
         out = {}
         for k in keys:
-            # look in the source dict or in the summary
-            val = src.get(k)
-            if val is None:
-                val = src.get('summary', {}).get(k)
-            out[k]=val
+            
+            # first look into the source. Use silly default to distinguish from not found
+            # if you don't find it, look in the summary (download if not there yet)
+            val = retrieve(src, k, 666)
+            if val == 666:
+                summary = self.source_summary(name, append=append_summary)
+                val = retrieve(summary, k, 666)
+            
+            # output warning
+            if val == 666:
+                self.logger.warning(
+                    "cannot find key %s in source dictionary or in it's summary. Available keys are %s"%
+                    (k, repr(summary.keys())))
+                val = default
+            
+            out[k] = val
         return out
+    
 
     def get_summaries(self, refresh=False, nworkers=24):
         """
