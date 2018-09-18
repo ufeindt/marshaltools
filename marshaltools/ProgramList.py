@@ -115,7 +115,6 @@ class ProgramList(BaseTable):
         if load_candidates:
             self.get_candidates()
         self.lightcurves = None
-        self.candidates = {}            # candidates sources from the scanning page
 
 
 ## TODO:
@@ -472,7 +471,7 @@ class ProgramList(BaseTable):
         # turn the candidate list into a dictionary
         self.candidates = {s['name']:s for s in candidates}
         self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
-        return self.candidates
+#        return self.candidates
 
 
     def fetch_all_lightcurves(self):
