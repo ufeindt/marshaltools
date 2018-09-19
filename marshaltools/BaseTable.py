@@ -34,10 +34,6 @@ def decrypt_config():
     out = json.load(open(_CONFIG_FILE, "r"))
     return out['username'], out['password']
 
-if not os.path.exists(_CONFIG_FILE):
-    encrypt_config()
-
-
 class BaseTable(object):
     """
     Virtual class that only contains the config loading method
