@@ -139,7 +139,7 @@ class ProgramList(BaseTable):
             auth=(self.user, self.passwd),
             data={
                 'program': self.programidx,
-                'candid': avro_id
+                'candid': candid
                 }
             )
 
