@@ -20,7 +20,9 @@ MARSHALL_SCRIPTS = (
                     'list_candidates.cgi',
                     'list_program_sources.cgi',
                     'source_summary.cgi',
-                    'print_lc.cgi'
+                    'print_lc.cgi',
+                    'ingest_avro_id.cgi',
+                    'save_cand_growth.cgi'
                     )
 
 httpErrors = {

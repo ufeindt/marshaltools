@@ -112,18 +112,36 @@ class ProgramList(BaseTable):
         self.lightcurves = None
 
 
-## TODO:
-##      - change the name to MarshalProgram?
-##      - retrieve / post annotations for source
-##      - ingest avro ID
+    def ingest_avro(self, avro_id, anal=True):
+        """
+            ingest alert into the marshall
+        """
+        self.logger.info("Ingesting avro package %d into program %s"%(avro_id, self.program))
+        growthcgi(
+            'ingest_avro_id.cgi',
+            logger=self.logger,
+            auth=(self.user, self.passwd),
+            data={
+                'programidx': self.programidx,
+                'avroid': avro_id
+                }
+            )
 
 
-# from the sergeant we can scrape:
-# add_avro_id(self, avroid):
-
-# get/post annotations
-
-# get/post comments
+    def save_source(self, candid):
+        """
+            save given source
+        """
+        self.logger.info("Saving source %s into program %s"%(candid, self.program))
+        growthcgi(
+            'save_cand_growth.cgi',
+            logger=self.logger,
+            auth=(self.user, self.passwd),
+            data={
+                'program': self.programidx,
+                'candid': avro_id
+                }
+            )
 
 
     def _list_programids(self):
@@ -196,6 +214,83 @@ class ProgramList(BaseTable):
         return src
 
 
+    def find_source(self, name, include_candidates=True):
+        """
+            return the desired source from the sources belonging to this
+            program. If not found in the saved sources, it will look among
+            the candidates from the scanning page
+        """
+        src = self.sources.get(name)
+        if src is None:
+            self.logger.debug("can't find source named %s among saved sources of program %s"%
+                (name, self.program))
+            if include_candidates and hasattr(self, 'candidates'):
+                src = self.candidates.get(name)
+                if src is None:
+                    self.logger.debug("can't find it among candidates either.")
+                else:
+                    self.logger.debug("found source %s among candidates of program %s"%
+                        (name, self.program))
+        else:
+            self.logger.debug("found source %s among saved sources of program %s"%
+                (name, self.program))
+        return src
+
+
+    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True, include_candidates=True):
+        """
+            read the desired key(s) for the requested source. Use retrieve to 
+            support dotted notations to traverse nested dictionaries. 
+            
+            e.g. key=='annotations.username' returns a list of all the usernames
+            found in the annotation list of dictionaries of the summary.
+            
+            See docstring
+            of retrieve function at the top of this module.
+            
+            to be compatible with the candidates as well, one can use the src parameter
+            to pass a 'source-like' dictionary to the function. This will overwrite the name.
+        """
+        
+        # get the source (if no dictionary has been given, look for it)
+        if src_dict is None:
+            src = self.find_source(name, include_candidates)
+        else:
+            src = src_dict
+        if src is None:
+            return default
+        
+        # keys can be a list
+        if type(keys) is str:
+            keys = [keys]
+        
+        # loop trough the keys and get their values
+        out = {}
+        for k in keys:
+            
+            # first look into the source. Use silly default to distinguish from not found
+            # if you don't find it, look in the summary (download if not there yet)
+            val = retrieve(src, k, 666)
+            if val == 666:
+                summary = self.source_summary(name, append=append_summary)
+                
+                # check for no summary on the marhsall, unknown source, or missing 'id' key
+                if summary == {} or summary is None:
+                    val = default
+                else:
+                    val = retrieve(summary, k, 666)
+                
+            # output warning
+            if val == 666:
+                self.logger.warning(
+                    "cannot find key %s in source dictionary or in it's summary. Available keys are %s"%
+                    (k, repr(summary.keys())))
+                val = default
+            
+            out[k] = val
+        return out
+
+
     def source_summary(self, name, append=False, refresh=False):
         """
             look for the source summary information for the given source, if not
@@ -258,60 +353,6 @@ class ProgramList(BaseTable):
             summary = None
         return summary
 
-
-    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True, include_candidates=True):
-        """
-            read the desired key(s) for the requested source. Use retrieve to 
-            support dotted notations to traverse nested dictionaries. 
-            
-            e.g. key=='annotations.username' returns a list of all the usernames
-            found in the annotation list of dictionaries of the summary.
-            
-            See docstring
-            of retrieve function at the top of this module.
-            
-            to be compatible with the candidates as well, one can use the src parameter
-            to pass a 'source-like' dictionary to the function. This will overwrite the name.
-        """
-        
-        # get the source (if no dictionary has been given, look for it)
-        if src_dict is None:
-            src = self.find_source(name, include_candidates)
-        else:
-            src = src_dict
-        if src is None:
-            return default
-        
-        # keys can be a list
-        if type(keys) is str:
-            keys = [keys]
-        
-        # loop trough the keys and get their values
-        out = {}
-        for k in keys:
-            
-            # first look into the source. Use silly default to distinguish from not found
-            # if you don't find it, look in the summary (download if not there yet)
-            val = retrieve(src, k, 666)
-            if val == 666:
-                summary = self.source_summary(name, append=append_summary)
-                
-                # check for no summary on the marhsall, unknown source, or missing 'id' key
-                if summary == {} or summary is None:
-                    val = default
-                else:
-                    val = retrieve(summary, k, 666)
-                
-            # output warning
-            if val == 666:
-                self.logger.warning(
-                    "cannot find key %s in source dictionary or in it's summary. Available keys are %s"%
-                    (k, repr(summary.keys())))
-                val = default
-            
-            out[k] = val
-        return out
-    
 
     def get_summaries(self, refresh=False, nworkers=24):
         """
@@ -494,29 +535,6 @@ class ProgramList(BaseTable):
         """
         for name in self.sources.keys():
             self.get_lightcurve(name)
-
-
-    def find_source(self, name, include_candidates=True):
-        """
-            return the desired source from the sources belonging to this
-            program. If not found in the saved sources, it will look among
-            the candidates from the scanning page
-        """
-        src = self.sources.get(name)
-        if src is None:
-            self.logger.debug("can't find source named %s among saved sources of program %s"%
-                (name, self.program))
-            if include_candidates and hasattr(self, 'candidates'):
-                src = self.candidates.get(name)
-                if src is None:
-                    self.logger.debug("can't find it among candidates either.")
-                else:
-                    self.logger.debug("found source %s among candidates of program %s"%
-                        (name, self.program))
-        else:
-            self.logger.debug("found source %s among saved sources of program %s"%
-                (name, self.program))
-        return src
 
 
     def get_lightcurve(self, name):
