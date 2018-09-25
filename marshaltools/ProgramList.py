@@ -128,17 +128,22 @@ class ProgramList(BaseTable):
             )
 
 
-    def save_source(self, candid):
+    def save_source(self, candid,programidx=None):
         """
             save given source
         """
-        self.logger.info("Saving source %s into program %s"%(candid, self.program))
+
+        if programidx is None:
+            programidx = self.programidx
+        
+        
+        self.logger.info("Saving source %s into program %s"%(candid, programidx))
         growthcgi(
             'save_cand_growth.cgi',
             logger=self.logger,
             auth=(self.user, self.passwd),
             data={
-                'program': self.programidx,
+                'program': programidx,
                 'candid': candid
                 }
             )
