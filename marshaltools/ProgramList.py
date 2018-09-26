@@ -13,12 +13,12 @@ import astropy.units as u
 import concurrent.futures
 
 import logging
-logging.basicConfig(level = logging.INFO)
+logging.basicConfig(level = logging.DEBUG)
 
 from marshaltools import BaseTable
 from marshaltools import MarshalLightcurve
 from marshaltools import SurveyFields, ZTFFields
-from marshaltools.gci_utils import growthcgi, query_scanning_page
+from marshaltools.gci_utils import growthcgi, query_scanning_page, ingest_candidates
 from marshaltools.filters import _DEFAULT_FILTERS
 
 def retrieve(in_dict, key, default=None):
@@ -112,40 +112,51 @@ class ProgramList(BaseTable):
         self.lightcurves = None
 
 
-    def ingest_avro(self, avro_id, anal=True):
+    def ingest_avro(self, avro_id, be_anal=True, max_attempts=3):
         """
-            ingest alert into the marshall
+            ingest alert(s) into the marshall.
+            
+            Paramaters:
+            -----------
+                
+                avro_id: `str` or `list`
+                    ids of candidates to be ingested.
+                
+                be_anal: `bool`
+                    if True after ingestion we'll look for recently ingested candidates
+                    and verify which alert has failed and which has not.
+                
+                max_attempts: `int`
+                    if be_anal is True, we'll try repeating ingestion max_attempts times
+                    for the alerts that failed.
+            
+            Returns:
+            --------
+                
+                list of avro_ids that failed to be ingested (None if you're not so anal about it)
         """
-        self.logger.info("Ingesting avro package %d into program %s"%(avro_id, self.program))
-        growthcgi(
-            'ingest_avro_id.cgi',
-            logger=self.logger,
-            auth=(self.user, self.passwd),
-            data={
-                'programidx': self.programidx,
-                'avroid': avro_id
-                }
+        return ingest_candidates(
+            avro_ids = avro_id,
+            program_name = self.program,
+            be_anal = be_anal, 
+            max_attempts = max_attempts,
+            auth=(self.user, self.passwd), 
+            logger=self.logger
             )
 
 
-    def save_source(self, candid,programidx=None):
+    def save_source(self, candid, programidx=None):
         """
-            save given source
+            save given source,
         """
-
         if programidx is None:
             programidx = self.programidx
-        
-        
         self.logger.info("Saving source %s into program %s"%(candid, programidx))
         growthcgi(
             'save_cand_growth.cgi',
             logger=self.logger,
             auth=(self.user, self.passwd),
-            data={
-                'program': programidx,
-                'candid': candid
-                }
+            data={'program': programidx, 'candid': candid}
             )
 
 
@@ -171,7 +182,6 @@ class ProgramList(BaseTable):
             raise ValueError('Could not find program "%s". You are member of: %s'%(
                 self.program, ', '.join([p['name'] for p in self.program_list])
             ))
-
 
     def get_saved_sources(self):
         """
@@ -444,7 +454,6 @@ class ProgramList(BaseTable):
                     function will raise and exception if raise_on_fail is True, else it 
                     will simply throw a warning.
         """
-        
         
         # parse time limts
         if not trange is None:
