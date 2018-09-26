@@ -34,10 +34,6 @@ def decrypt_config():
     out = json.load(open(_CONFIG_FILE, "r"))
     return out['username'], out['password']
 
-if not os.path.exists(_CONFIG_FILE):
-    encrypt_config()
-
-
 class BaseTable(object):
     """
     Virtual class that only contains the config loading method
@@ -50,13 +46,13 @@ class BaseTable(object):
         
         
         if user is None or passwd is None:
-            if os.path.exists(_CONFIG_FILE):
-                user, pw = decrypt_config()
-                self.user = user
-                self.passwd = pw
-            else:
-                raise ValueError('Please provide username and password' +
-                                 ' as options "user" and "passwd".')
+            
+            # if not present, create the pwd file and read the credentials
+            if not os.path.exists(_CONFIG_FILE):
+                encrypt_config()
+            user, pw = decrypt_config()
+            self.user = user
+            self.passwd = pw
         else:
             self.user = user
             self.passwd = passwd

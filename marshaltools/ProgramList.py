@@ -13,13 +13,66 @@ import astropy.units as u
 import concurrent.futures
 
 import logging
-logging.basicConfig(level = logging.INFO)
+logging.basicConfig(level = logging.DEBUG)
 
 from marshaltools import BaseTable
 from marshaltools import MarshalLightcurve
 from marshaltools import SurveyFields, ZTFFields
-from marshaltools.gci_utils import growthcgi, query_scanning_page
+from marshaltools.gci_utils import growthcgi, query_scanning_page, ingest_candidates
 from marshaltools.filters import _DEFAULT_FILTERS
+
+def retrieve(in_dict, key, default=None):
+    """
+        modified dict.get method that allows to traverse
+        nested dictionaries using a dotted notation and supports
+        going though lists as well.
+        
+        Parameters:
+        -----------
+        
+        in_dict: `dict`
+            possibly complex dictionary
+        
+        key: `str`
+            what to look for
+        
+        default:
+            what to return if the key is not found
+
+        Eg:
+
+        dd = {
+            'a': 1,
+            'b': {
+                'x': 10,
+                'y': 11, 
+                'z': {'l': 100, 'm': 101}
+                },
+            'z': [{'e': 200, 'f': 201}, {'e': 201, 'f': 202}],
+            'c': 3
+            }
+
+        retrieve(dd, a) = 1
+        retrieve(dd, 'b.y') = 11
+        retrieve(dd, 'b.w', 'fuffa') = 'fuffa'
+        retrieve(dd, 'b.z.m') = 101
+        retrieve(dd, 'z.e') = [200, 201]
+    """
+    
+    if not '.' in key:
+        return in_dict.get(key, default)
+    
+    for k in key.split('.'):
+        out = in_dict.get(k, default)
+        klist = key.split('.')
+        klist.remove(k)
+        new_key = ".".join(klist)
+        if type(out) == dict:
+            return retrieve(out, new_key, default)
+        elif type(out) in [tuple, list]:
+            return [retrieve(x, new_key, default) for x in out]
+        elif out == default:
+            return default
 
 
 class ProgramList(BaseTable):
@@ -36,7 +89,6 @@ class ProgramList(BaseTable):
                    and filter, values are the sncosmo bandpass names, 
                    see _DEFAULT_FILTERS for an example.
     """
-
 
     def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, **kwargs):
         """
@@ -58,21 +110,54 @@ class ProgramList(BaseTable):
         if load_candidates:
             self.get_candidates()
         self.lightcurves = None
-        self.candidates = {}            # candidates sources from the scanning page
 
 
-## TODO:
-##      - change the name to MarshalProgram?
-##      - retrieve / post annotations for source
-##      - ingest avro ID
+    def ingest_avro(self, avro_id, be_anal=True, max_attempts=3):
+        """
+            ingest alert(s) into the marshall.
+            
+            Paramaters:
+            -----------
+                
+                avro_id: `str` or `list`
+                    ids of candidates to be ingested.
+                
+                be_anal: `bool`
+                    if True after ingestion we'll look for recently ingested candidates
+                    and verify which alert has failed and which has not.
+                
+                max_attempts: `int`
+                    if be_anal is True, we'll try repeating ingestion max_attempts times
+                    for the alerts that failed.
+            
+            Returns:
+            --------
+                
+                list of avro_ids that failed to be ingested (None if you're not so anal about it)
+        """
+        return ingest_candidates(
+            avro_ids = avro_id,
+            program_name = self.program,
+            be_anal = be_anal, 
+            max_attempts = max_attempts,
+            auth=(self.user, self.passwd), 
+            logger=self.logger
+            )
 
 
-# from the sergeant we can scrape:
-# add_avro_id(self, avroid):
-
-# get/post annotations
-
-# get/post comments
+    def save_source(self, candid, programidx=None):
+        """
+            save given source,
+        """
+        if programidx is None:
+            programidx = self.programidx
+        self.logger.info("Saving source %s into program %s"%(candid, programidx))
+        growthcgi(
+            'save_cand_growth.cgi',
+            logger=self.logger,
+            auth=(self.user, self.passwd),
+            data={'program': programidx, 'candid': candid}
+            )
 
 
     def _list_programids(self):
@@ -97,7 +182,6 @@ class ProgramList(BaseTable):
             raise ValueError('Could not find program "%s". You are member of: %s'%(
                 self.program, ', '.join([p['name'] for p in self.program_list])
             ))
-
 
     def get_saved_sources(self):
         """
@@ -128,6 +212,186 @@ class ProgramList(BaseTable):
             self.sources[name]['fields'] = f_
             self.sources[name]['ccds'] = c_
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
+
+
+    def get_source(self, name):
+        """
+            return desired source from the saved ones
+        """
+        
+        if not hasattr(self, 'sources'):
+            raise RuntimeError("no sources loaded for program %s."%self.program)
+        
+        src = self.sources.get(name)
+        if src is None:
+             self.logger.debug("can't find source %s in the saved sources of program %s"%
+                (name, self.program))
+        return src
+
+
+    def find_source(self, name, include_candidates=True):
+        """
+            return the desired source from the sources belonging to this
+            program. If not found in the saved sources, it will look among
+            the candidates from the scanning page
+        """
+        src = self.sources.get(name)
+        if src is None:
+            self.logger.debug("can't find source named %s among saved sources of program %s"%
+                (name, self.program))
+            if include_candidates and hasattr(self, 'candidates'):
+                src = self.candidates.get(name)
+                if src is None:
+                    self.logger.debug("can't find it among candidates either.")
+                else:
+                    self.logger.debug("found source %s among candidates of program %s"%
+                        (name, self.program))
+        else:
+            self.logger.debug("found source %s among saved sources of program %s"%
+                (name, self.program))
+        return src
+
+
+    def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True, include_candidates=True):
+        """
+            read the desired key(s) for the requested source. Use retrieve to 
+            support dotted notations to traverse nested dictionaries. 
+            
+            e.g. key=='annotations.username' returns a list of all the usernames
+            found in the annotation list of dictionaries of the summary.
+            
+            See docstring
+            of retrieve function at the top of this module.
+            
+            to be compatible with the candidates as well, one can use the src parameter
+            to pass a 'source-like' dictionary to the function. This will overwrite the name.
+        """
+        
+        # get the source (if no dictionary has been given, look for it)
+        if src_dict is None:
+            src = self.find_source(name, include_candidates)
+        else:
+            src = src_dict
+        if src is None:
+            return default
+        
+        # keys can be a list
+        if type(keys) is str:
+            keys = [keys]
+        
+        # loop trough the keys and get their values
+        out = {}
+        for k in keys:
+            
+            # first look into the source. Use silly default to distinguish from not found
+            # if you don't find it, look in the summary (download if not there yet)
+            val = retrieve(src, k, 666)
+            if val == 666:
+                summary = self.source_summary(name, append=append_summary)
+                
+                # check for no summary on the marhsall, unknown source, or missing 'id' key
+                if summary == {} or summary is None:
+                    val = default
+                else:
+                    val = retrieve(summary, k, 666)
+                
+            # output warning
+            if val == 666:
+                self.logger.warning(
+                    "cannot find key %s in source dictionary or in it's summary. Available keys are %s"%
+                    (k, repr(summary.keys())))
+                val = default
+            
+            out[k] = val
+        return out
+
+
+    def source_summary(self, name, append=False, refresh=False):
+        """
+            look for the source summary information for the given source, if not
+            present, get it via the source_summary cgi script. 
+            
+            Parameters:
+            -----------
+            
+                name: `str`
+                    ZTF name of source.
+                
+                append: `bool`
+                    if True and the source is present in this program's saved sources list, 
+                    the information returned by this script is added to the source.
+                
+                refresh: `bool`
+                    if True
+            
+            Returns:
+            --------
+                
+                dict with source_summary.gci command output
+        """
+        
+        # get the source, either from the saved or from the candidates
+        src = self.find_source(name)
+        if not src is None:
+            
+            # figure out which key contains the id
+            if self.sources.get(name) is None:
+                src_id = src.get('sourceId')
+            else:
+                src_id = src.get('id')
+            if src_id is None:
+                self.logger.warning(
+                    "Unable to retrieve summary. '_id' or 'sourceId' not in src dictionary. Keys are: %s"%
+                        (repr(src.keys())))
+                return {}
+            
+            # see if it has a summary already
+            summary = src.get('summary')
+            
+            # if not or if you want to update it, execute the script
+            if summary is None or refresh:
+                summary = growthcgi(
+                        'source_summary.cgi',
+                        logger=self.logger,
+                        auth=(self.user, self.passwd),
+                        data={'sourceid' : src_id},
+                        )
+                if summary == {}:
+                    self.logger.warning("source %s has no summary"%(name))
+                else:
+                    self.logger.debug("got source summary for source %s."%name)
+                
+                # eventually append
+                if append:
+                    src['summary'] = summary
+        else:
+            summary = None
+        return summary
+
+
+    def get_summaries(self, refresh=False, nworkers=24):
+        """
+            get the summaries for all the saved sources and add them to the
+            list of saved sources.
+        """
+        
+        def dowload_summary(src_name):
+            self.source_summary(src_name, append=True, refresh=refresh)
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+                jobs = {
+                    executor.submit(dowload_summary, src): src for src in self.sources}
+                # inspect completed jobs
+                for job in concurrent.futures.as_completed(jobs):
+                    src_name = jobs[job]
+                    # inspect job result
+                    try:
+                        # collect all the results
+                        summ = job.result()
+                        self.logger.debug("succesfully retrievd summary for source %s"%src_name)
+                    except Exception as e:
+                        self.logger.error("can't find summary for source %s"%src_name)
+        self.logger.info("downloaded the summaries for all the saved sources.")
 
 
     def query_candidate_page(self, showsaved, start_date=None, end_date=None):
@@ -190,7 +454,6 @@ class ProgramList(BaseTable):
                     function will raise and exception if raise_on_fail is True, else it 
                     will simply throw a warning.
         """
-        
         
         # parse time limts
         if not trange is None:
@@ -286,29 +549,6 @@ class ProgramList(BaseTable):
         """
         for name in self.sources.keys():
             self.get_lightcurve(name)
-
-
-    def get_source(self, name, include_candidates=True):
-        """
-            return the desired source from the sources belonging to this
-            program. If not found in the saved sources, it will look among
-            the candidates from the scanning page
-        """
-        src = self.sources.get(name)
-        if src is None:
-            self.logger.debug("can't find source named %s among saved sources of program %s"%
-                (name, self.program))
-            if include_candidates:
-                src = self.candidates.get(name)
-                if src is None:
-                    self.logger.debug("can't find it among candidates either.")
-                else:
-                    self.logger.debug("found source %s among candidates of program %s"%
-                        (name, self.program))
-        else:
-            self.logger.debug("found source %s among saved sources of program %s"%
-                (name, self.program))
-        return src
 
 
     def get_lightcurve(self, name):
