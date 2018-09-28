@@ -156,6 +156,7 @@ class ProgramList(BaseTable):
         growthcgi(
             'save_cand_growth.cgi',
             logger=self.logger,
+            to_json=False,
             auth=(self.user, self.passwd),
             data={'program': programidx, 'candid': candid}
             )
