@@ -152,7 +152,7 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
     """
     
     # remember the time to be able to go veryfy downloaded candidates
-    start_ingestion = Time.now() - 10*u.min
+    start_ingestion = Time.now() - 24*u.hour    #TODO: restrict once you are certain
     
     # get the logger
     logger = logger if not logger is None else logging.getLogger(__name__)
