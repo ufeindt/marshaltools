@@ -138,6 +138,7 @@ class ProgramList(BaseTable):
         return ingest_candidates(
             avro_ids = avro_id,
             program_name = self.program,
+            program_id = self.programidx,
             be_anal = be_anal, 
             max_attempts = max_attempts,
             auth=(self.user, self.passwd), 
@@ -414,7 +415,7 @@ class ProgramList(BaseTable):
                                     logger=self.logger)
 
 
-    def get_candidates(self, showsaved="all", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
+    def get_candidates(self, showsaved="selected", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
         """
             download the list fo the sources in the scanning page of this program.
             
