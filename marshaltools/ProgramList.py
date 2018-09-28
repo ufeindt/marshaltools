@@ -161,7 +161,23 @@ class ProgramList(BaseTable):
             data={'program': programidx, 'candid': candid}
             )
 
+    def save_source_name(self, candname, programidx=None):
+        """
+            save given source,
+        """
+        if programidx is None:
+            programidx = self.programidx
+        self.logger.info("Saving source %s into program %s"%(candname, programidx))
+        growthcgi(
+            'save_cand_growth.cgi',
+            logger=self.logger,
+            to_json=False,
+            auth=(self.user, self.passwd),
+            data={'program': programidx, 'candname': candname}
+            )
 
+
+        
     def _list_programids(self):
         """
         get a list of all the programs the user is member of.
