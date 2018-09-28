@@ -9,7 +9,7 @@ from astropy.time import Time
 import astropy.units as u
 
 import logging
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(level = logging.INFO)
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -213,6 +213,8 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
                 auth=auth, 
                 logger=logger)
             
+            # if you got none it could mean you haven't ingested them.
+            # but could also be just a question of time. Death is the only certainty
             if len(new_candidates) == 0:
                 logger.warning("attempt # %d. No new candidates, upload seems to have failed."%n_attempts)
                 failed = to_ingest
