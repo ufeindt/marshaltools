@@ -152,7 +152,7 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
     """
     
     # remember the time to be able to go veryfy downloaded candidates
-    start_ingestion = Time.now() - 24*u.hour    #TODO: restrict once you are certain
+    start_ingestion = Time.now() - 24*u.hour    #TODO: restrict once you are certain it works
     
     # get the logger
     logger = logger if not logger is None else logging.getLogger(__name__)
@@ -177,7 +177,7 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
         (len(to_ingest), program_name, ingest_pid))
     
     # ingest all the candidates, eventually veryfying and retrying
-    n_attempts = 0
+    n_attempts, failed = 0, []
     while len(to_ingest)>0 and n_attempts < max_attempts:
         
         n_attempts+=1
@@ -203,7 +203,7 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
         end_ingestion = Time.now() + 10*u.min
         logger.info("veryfying ingestion looking at candidates ingested between %s and %s"%
                 (start_ingestion.iso, end_ingestion.iso))
-        done, failed = [], []
+        done, failed = [], []   # here overwite global one
         try:
             new_candidates = query_scanning_page(
                 start_date=start_ingestion.iso, 
