@@ -239,4 +239,3 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
     # return the list of ids that failed consistently after all the attempts
     return failed
 
-
