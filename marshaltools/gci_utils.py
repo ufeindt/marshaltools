@@ -172,6 +172,10 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
     logger.info("Trying to ingest %d candidate(s) to marshal program %s (ingest ID %d)"%
         (len(to_ingest), program_name, ingest_pid))
     
+    # If there is nothing to ingest, we are done with no failures :)
+    if len(to_ingest) == 0 :
+        failed = []
+        return failed
     # ingest all the candidates, eventually veryfying and retrying
     n_attempts = 0
     while len(to_ingest)>0 and n_attempts < max_attempts:
