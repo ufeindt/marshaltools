@@ -138,27 +138,120 @@ class ProgramList(BaseTable):
         return ingest_candidates(
             avro_ids = avro_id,
             program_name = self.program,
+            program_id = self.programidx,
             be_anal = be_anal, 
             max_attempts = max_attempts,
             auth=(self.user, self.passwd), 
             logger=self.logger
             )
 
-
-    def save_source(self, candid, programidx=None):
+    def save_sources(self, candidate, programidx=None, save_by='name', max_attempts=3, be_anal=True):
         """
-            save given source,
+            save given source(s) either specifying the name of the id.
+            
+            Parameters:
+            -----------
+                
+                candidate: `str` or `list`
+                    ID or name of candidate(s) to be saved, depending on the value
+                    of save_from.
+                
+                save_by: `str`
+                    either 'name' or 'id', specify if the candidate param
+                    contains the id or the name of the candidate.
+                
+                programidx: `int`
+                    ID of program to which the source(s) sould be saved. 
+                
+                be_anal: `bool`
+                    if True after ingestion we'll look for recently ingested candidates
+                    and verify which alert has failed and which has not.
+                
+                max_attempts: `int`
+                    if be_anal is True, we'll try repeating ingestion max_attempts times
+                    for the alerts that failed.
+        """
+        
+        if programidx is None:      #TODO: read from INGEST_PID list
+            programidx = self.programidx
+        
+        # parse save_by to cgi acceptable key
+        if save_by == 'name':
+            cgi_key = 'candname'
+        elif save_by == 'id':
+            cgi_key = 'candid'
+        else:
+            raise KeyError("save_by parameter should be either 'name' or 'id'. Got %s instead"%
+                (save_by))
+        
+        # see if you want to ingest one or more candidates
+        if type(candidate) in [str, int]:
+            to_save = [candidate]
+        else:
+            to_save = [str(cc) for cc in candidate]
+        self.logger.info("Saving %d candidate(s) into program %s"%(len(to_save), programidx))
+        # save all the candidates, eventually veryfying and retrying
+        n_attempts, failed = 0, []
+        while len(to_save)>0 and n_attempts < max_attempts:
+            
+            n_attempts+=1
+            self.logger.debug("attempt number %d of %d."%(n_attempts, max_attempts))
+            
+            # ingest them
+            for cand in to_save:
+                status = growthcgi(
+                    'save_cand_growth.cgi',
+                    logger=self.logger,
+                    to_json=False,
+                    auth=(self.user, self.passwd),
+                    data={'program': programidx, cgi_key: cand}
+                    )
+                self.logger.debug("Ingesting candidate %s returned %s"%(cand, status))
+            self.logger.info("Attempt %d: done ingesting candidates."%n_attempts)
+            
+            # if you take life easy then it's your problem. We'll exit the loop
+            if not be_anal:
+                return None
+            
+            # if you want to be anal about that look that all the candidates have been saved
+            self.logger.info("verifying thet all candidates are saved")
+            done, failed = [], []   # here overwite global one
+            
+            # refresh saved source and look for the ones you just saved
+            self.get_saved_sources()
+            saved_ids = self.sources.keys()
+            if save_by == 'candid':
+                saved_ids = [str(src['candid']) for _, src in self.sources.items()]
+            
+            # see what's there and what's missing
+            for cand in to_save:
+                if cand in saved_ids:
+                    done.append(cand)
+                else:
+                    failed.append(cand)
+            self.logger.info("attempt # %d. Of the desired candidates %d successfully saved, %d failed"%
+                (n_attempts, len(done), len(failed)))
+            
+            # remember what is still to be done
+            to_save = failed
+        
+        # return the list of ids that failed consistently after all the attempts
+        return failed
+
+    def save_source_name(self, candname, programidx=None):
+        """
+            save given source. DEPRECATED: use save_sources!!
         """
         if programidx is None:
             programidx = self.programidx
-        self.logger.info("Saving source %s into program %s"%(candid, programidx))
+        self.logger.info("Saving source %s into program %s"%(candname, programidx))
         growthcgi(
             'save_cand_growth.cgi',
             logger=self.logger,
+            to_json=False,
             auth=(self.user, self.passwd),
-            data={'program': programidx, 'candid': candid}
+            data={'program': programidx, 'candname': candname}
             )
-
 
     def _list_programids(self):
         """
@@ -180,8 +273,8 @@ class ProgramList(BaseTable):
                 self.programidx = program['programidx']
         if self.programidx == -1:
             raise ValueError('Could not find program "%s". You are member of: %s'%(
-                self.program, ', '.join([p['name'] for p in self.program_list])
-            ))
+                self.program, ', '.join([p['name'] for p in self.program_list])))
+
 
     def get_saved_sources(self):
         """
@@ -414,7 +507,7 @@ class ProgramList(BaseTable):
                                     logger=self.logger)
 
 
-    def get_candidates(self, showsaved="all", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
+    def get_candidates(self, showsaved="selected", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
         """
             download the list fo the sources in the scanning page of this program.
             

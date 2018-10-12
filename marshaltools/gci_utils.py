@@ -70,7 +70,6 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
     n_try, success = 0, False
     while n_try<max_attemps:
         logger.debug('Starting %s post. Attempt # %d'%(scriptname, n_try))
-        
         # set timeout from kwargs or use default
         timeout = request_kwargs.pop('timeout', 30) + (60*n_try-1)
         
@@ -145,7 +144,7 @@ def query_scanning_page(start_date, end_date, program_name, showsaved="selected"
     return srcs
 
 
-def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None, logger=None):
+def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=3, auth=None, logger=None):
     """
         ingest one or more candidate(s) by avro id into the marhsal.
         If needed we can be anal about it and go and veryfy the ingestion.
@@ -153,23 +152,28 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
     """
     
     # remember the time to be able to go veryfy downloaded candidates
-    start_ingestion = Time.now()
+    start_ingestion = Time.now() - 24*u.hour    #TODO: restrict once you are certain it works
     
     # get the logger
     logger = logger if not logger is None else logging.getLogger(__name__)
     
-    # get the program id used by the ingest page
-    ingest_pid = INGEST_PROGRAM_IDS.get(program_name)
-    if ingest_pid is None:
-        raise KeyError("cannot find program %s in SCIENCEPROGRAM_IDS. Availables are: %s"
-            %", ".join(SCIENCEPROGRAM_IDS.keys()))
+#    # get the program id used by the ingest page
+#    ingest_pid = INGEST_PROGRAM_IDS.get(program_name)
+#    if ingest_pid is None:
+#        raise KeyError("cannot find program %s in SCIENCEPROGRAM_IDS. Availables are: %s"
+#            %", ".join(SCIENCEPROGRAM_IDS.keys()))
+    
+    # apparently the ingestion prefers to use the 'user specific' program id 
+    # rather than the other ones.  TODO: figure out if this is a consistent behaviour
+    ingest_pid = program_id
     
     # see if you want to ingest just one candidates or a whole bunch of them
+    # cast everything to string for consistency and checking
     if type(avro_ids) in [str, int]:
-        to_ingest = [avro_ids]
+        to_ingest = [str(avro_ids)]
     else:
-        to_ingest = avro_ids
-    logger.info("Trying to ingest %d candidate(s) to marshal program %s (ingest ID %d)"%
+        to_ingest = [str(aid) for aid in avro_ids]
+    logger.info("Trying to ingest %d candidate(s) to to marhsal program %s using ingest ID %d"%
         (len(to_ingest), program_name, ingest_pid))
     
     # If there is nothing to ingest, we are done with no failures :)
@@ -177,7 +181,7 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
         failed = []
         return failed
     # ingest all the candidates, eventually veryfying and retrying
-    n_attempts = 0
+    n_attempts, failed = 0, []
     while len(to_ingest)>0 and n_attempts < max_attempts:
         
         n_attempts+=1
@@ -190,9 +194,9 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
                 logger=logger,
                 auth=auth,
                 to_json=False,
-                data={'avroid': str(avro_id), 'programidx': str(ingest_pid)}
+                data={'avroid': avro_id, 'programidx': str(ingest_pid)}
                 )
-            logger.debug("Ingesting candidate %s returned %s"%(str(avro_id), status))
+            logger.debug("Ingesting candidate %s returned %s"%(avro_id, status))
         logger.info("Attempt %d: done ingesting candidates."%n_attempts)
         
         # if you take life easy then it's your problem. We'll exit the loop
@@ -200,10 +204,10 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
             return None
         
         # if you want to be anal about that, go and make sure all the candidates are there
-        end_ingestion = Time.now()
+        end_ingestion = Time.now() + 10*u.min
         logger.info("veryfying ingestion looking at candidates ingested between %s and %s"%
                 (start_ingestion.iso, end_ingestion.iso))
-        done, failed = [], []
+        done, failed = [], []   # here overwite global one
         try:
             new_candidates = query_scanning_page(
                 start_date=start_ingestion.iso, 
@@ -213,13 +217,15 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
                 auth=auth, 
                 logger=logger)
             
+            # if you got none it could mean you haven't ingested them.
+            # but could also be just a question of time. Death is the only certainty
             if len(new_candidates) == 0:
                 logger.warning("attempt # %d. No new candidates, upload seems to have failed."%n_attempts)
                 failed = to_ingest
                 continue
             
             # see if the avro_id is there (NOTE: assume that the 'candid' in the sources stores the 'avro_id')
-            ingested_ids = [dd['candid'] for dd in new_candidates]
+            ingested_ids = [str(dd['candid']) for dd in new_candidates]
             for avro_id in to_ingest:
                 if avro_id in ingested_ids:
                     done.append(avro_id)
@@ -236,5 +242,4 @@ def ingest_candidates(avro_ids, program_name, be_anal, max_attempts=3, auth=None
     
     # return the list of ids that failed consistently after all the attempts
     return failed
-
 
