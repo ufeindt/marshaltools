@@ -175,7 +175,7 @@ class ProgramList(BaseTable):
         # if you don't pass the programID go read it from the static list of program-names & ids.
         if programidx is None:
             programidx = SCIENCEPROGRAM_IDS.get(self.program, -666)
-            if programidx = -666:
+            if programidx == -666:
                 raise KeyError("program %s is not listed in `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`. Go and add it yourself!")
             self.logger.info("reading programid from `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`")
             self.logger.info("programid for saving candidates for program %s: %d"%(self.program, programidx))
