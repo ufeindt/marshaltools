@@ -104,9 +104,11 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
             except KeyError as e:
                 message = 'Error %d: Undocumented error'%status
             logger.error(message)
-        logger.debug("Successful growth connection.")
-        success = True
-        break
+        else:
+            logger.debug("Successful growth connection.")
+            success = True
+            break
+        n_try+=1
     
     if not success:
         self.logger.error("Failure despite %d attemps!"%max_attemps)
