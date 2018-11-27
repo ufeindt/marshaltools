@@ -45,7 +45,9 @@ SCIENCEPROGRAM_IDS = {
     'Electromagnetic Counterparts to Neutrinos'     : 25,
     'Test Filter'                                   : 37,
     'Redshift Completeness Factor'                  : 24,
-    'Weizmann Test Filter'                          : 45
+    'Weizmann Test Filter'                          : 45,
+    'ZTFBH Offnucear'                               : 47,
+    'Nuclear Transients'                            : 10
     }
 
 INGEST_PROGRAM_IDS = {                              # TODO add all of them
