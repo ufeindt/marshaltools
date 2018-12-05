@@ -21,6 +21,12 @@ from marshaltools import SurveyFields, ZTFFields
 from marshaltools.gci_utils import growthcgi, query_scanning_page, ingest_candidates
 from marshaltools.filters import _DEFAULT_FILTERS
 
+try:
+    import sfdmap
+    _HAS_SFDMAP = True
+except ImportError:
+    _HAS_SFDMAP = False
+
 def retrieve(in_dict, key, default=None):
     """
         modified dict.get method that allows to traverse
@@ -103,6 +109,7 @@ class ProgramList(BaseTable):
         # look for the corresponding program id
         self.get_programidx()
         self.logger.info("Initialized ProgramList for program %s (ID %d)"%(self.program, self.programidx))
+        self._dustmap = None
         
         # now load all the saved sources
         if load_sources:
@@ -661,7 +668,9 @@ class ProgramList(BaseTable):
                 name, ra=self.sources[name]['ra'], dec=self.sources[name]['dec'],
                 redshift=self.sources[name]['redshift'],
                 classification=self.sources[name]['classification'],
-                filter_dict = self.filter_dict, sfd_dir=self.sfd_dir
+                filter_dict = self.filter_dict,
+                mwebv=(self.dustmap.ebv(self.sources[name]['ra'], self.sources[name]['dec'])
+                       if self.dustmap is not None else 0.)
             )
             self.lightcurves[name] = lc
         else:
@@ -738,3 +747,18 @@ class ProgramList(BaseTable):
         ra = [s['ra'] for s in self.sources.values()]
         dec = [s['dec'] for s in self.sources.values()]
         return Table(data=[names, ra, dec], names=['name', 'ra', 'dec'])
+
+    @property
+    def dustmap(self):
+        """Instance of SFD98 dust map"""
+        if self._dustmap is not None:
+            return self._dustmap
+        elif _HAS_SFDMAP:
+            if self.sfd_dir is None:
+                self._dustmap = sfdmap.SFDMap()
+            else:
+                self._dustmap = sfdmap.SFDMap(self.sfd_dir)
+            return self._dustmap
+        else:
+            return None
+        

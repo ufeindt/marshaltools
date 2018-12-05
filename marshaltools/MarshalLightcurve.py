@@ -12,12 +12,6 @@ from marshaltools import BaseTable
 from marshaltools.filters import _DEFAULT_FILTERS
 from marshaltools.gci_utils import growthcgi
 
-try:
-    import sfdmap
-    _HAS_SFDMAP = True
-except ImportError:
-    _HAS_SFDMAP = False
-
 class MarshalLightcurve(BaseTable):
     """Class for the lightcurve of a single source in the Marshal
     Arguments:  
@@ -35,7 +29,7 @@ class MarshalLightcurve(BaseTable):
                    see _DEFAULT_FILTERS for an example. 
     """
     def __init__(self, name, ra=None, dec=None, redshift=None, classification=None,
-                 sfd_dir=None, **kwargs):
+                 mwebv=0., **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
@@ -43,20 +37,13 @@ class MarshalLightcurve(BaseTable):
         self.name = name
         self.redshift = redshift
         self.classification = classification
-        self.sfd_dir = sfd_dir
         self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
         
         if ra is not None and dec is not None:
             self.ra = ra
             self.dec = dec
-            if _HAS_SFDMAP:
-                if self.sfd_dir is None:
-                    self.dustmap = sfdmap.SFDMap()
-                else:
-                    self.dustmap = sfdmap.SFDMap(self.sfd_dir)
-                self.mwebv = self.dustmap.ebv(ra, dec)
-            else:
-                self.mwebv = 0.0
+
+        self.mwebv = mwebv
         
         # get the light curve into a table
         r_text = growthcgi(
