@@ -27,7 +27,7 @@ prog = marshaltools.ProgramList("AMPEL Test")
 
 
 
-failed = prog.save_sources(candidates[1:], programidx=42, save_by='name', max_attempts=3, be_anal=True)
+failed = prog.save_sources(candidates[1:], save_by='name', max_attempts=3, be_anal=True)
 print (failed)
 
 
