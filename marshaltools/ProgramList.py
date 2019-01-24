@@ -13,7 +13,7 @@ import astropy.units as u
 import concurrent.futures
 
 import logging
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(level = logging.INFO)
 
 from marshaltools import BaseTable
 from marshaltools import MarshalLightcurve
@@ -273,7 +273,6 @@ class ProgramList(BaseTable):
             self.logger.debug("listing accessible programs")
             self.program_list = growthcgi('list_programs.cgi', logger=self.logger, auth=(self.user, self.passwd))
 
-
     def get_programidx(self):
         """
             assign the programID to this program
@@ -286,7 +285,6 @@ class ProgramList(BaseTable):
         if self.programidx == -1:
             raise ValueError('Could not find program "%s". You are member of: %s'%(
                 self.program, ', '.join([p['name'] for p in self.program_list])))
-
 
     def get_saved_sources(self):
         """
@@ -318,7 +316,6 @@ class ProgramList(BaseTable):
             self.sources[name]['ccds'] = c_
         self.logger.info("Loaded %d saved sources for program %s."%(len(self.sources), self.program))
 
-
     def get_source(self, name):
         """
             return desired source from the saved ones
@@ -326,13 +323,11 @@ class ProgramList(BaseTable):
         
         if not hasattr(self, 'sources'):
             raise RuntimeError("no sources loaded for program %s."%self.program)
-        
         src = self.sources.get(name)
         if src is None:
              self.logger.debug("can't find source %s in the saved sources of program %s"%
                 (name, self.program))
         return src
-
 
     def find_source(self, name, include_candidates=True):
         """
@@ -356,7 +351,6 @@ class ProgramList(BaseTable):
                 (name, self.program))
         return src
 
-
     def retrieve_from_src(self, name, keys, default=None, src_dict=None, append_summary=True, include_candidates=True):
         """
             read the desired key(s) for the requested source. Use retrieve to 
@@ -365,8 +359,7 @@ class ProgramList(BaseTable):
             e.g. key=='annotations.username' returns a list of all the usernames
             found in the annotation list of dictionaries of the summary.
             
-            See docstring
-            of retrieve function at the top of this module.
+            See docstring of retrieve function at the top of this module.
             
             to be compatible with the candidates as well, one can use the src parameter
             to pass a 'source-like' dictionary to the function. This will overwrite the name.
@@ -406,10 +399,187 @@ class ProgramList(BaseTable):
                     "cannot find key %s in source dictionary or in it's summary. Available keys are %s"%
                     (k, repr(summary.keys())))
                 val = default
-            
             out[k] = val
+        
+        # if you requested just one key, just return the corresponding item
+        if len(out) == 1:
+            out = out.get(keys[0])
         return out
 
+    def read_comments(self, name, comment_id=None, comment_type=None, 
+        comment_text=None, comment_author='self', refresh=True):
+        """
+            read the comments for the given source, eventaully selecting them based on 
+            type, author, content, or id.
+            
+            Parameters:
+            -----------
+            
+                name: `str`
+                    ZTF name of source.
+                
+                comment_type: `str`
+                    type of comment. Allowed values are: ['info', 'phase', 'redshift', 'comment', 'classification']
+                
+                comment_id: `int`
+                    ID of the comment. If None, don't filter on this field.
+                
+                comment_text: `str`
+                    body of the comment message. If None, don't filter on this field.
+                
+                comment_auth: `str`
+                    username of comment author, default 'self'==self.user. If None, don't filter
+                    on this field.
+                
+                refresh: `bool`
+                    if True, the source summary is refreshed posting to the marshall
+                    prior to search in the comments
+            
+            Returns:
+            --------
+                list of comments (dicts)
+        """
+        
+        self.logger.debug("reading comments for source: %s"%name)
+        if refresh:
+            self.source_summary(name, append=True, refresh=True)
+        
+        # replace author
+        author = self.user if comment_author == 'self' else comment_author
+        
+        # read the comments
+        comments = self.retrieve_from_src(name, keys=["annotations"])
+        found_cmts = []
+        if len(comments) > 0:
+            self.logger.debug("found %d previous comments matching the criteria."%len(comments))
+            
+            # now filter them
+            for cmt in comments:
+                match_author = True if author is None else cmt.get('username') == author
+                match_text   = True if comment_text is None else cmt.get("comment") == comment_text
+                match_type   = True if comment_type is None else cmt.get("type") == comment_type
+                match_id     = False if comment_id is None else cmt.get("id") == comment_id
+                if match_id or (match_author and match_text and match_type):
+                    found_cmts.append(cmt)
+        else:
+            self.logger.debug("no previous comments found for source %s"%name)
+        return found_cmts
+
+    def delete_comment(self, name, comment_id=None, comment_type=None, comment_text=None, 
+        comment_author='self', refresh=True):
+        """
+            delete a comment with the given id for the chosen source. If comment_id
+            is not given, delete the comment that matches the given text and type. 
+            See docstring of read_comments for help.
+        """
+        
+        # if ID it's not given, find out the comment ID from what it's in the summary
+        if comment_id is None:
+            prev_comments = self.read_comments(
+                name, comment_id, comment_type, comment_text, comment_author, refresh=refresh)
+            if prev_comments is None:
+                raise ValueError(
+                    "Cannot find previous comments for source. User refresh=True or provide valid comment ID")
+            comment_id = [cmt['id'] for cmt in prev_comments]
+        else:
+            if type(comment_id) in (int, str):
+                comment_id = [comment_id]
+        
+        # delete the comments
+        for cmt_id in comment_id:
+            self.logger.debug("deleting comment %s"%repr(cmt_id))
+            req_data = {
+                        "name"      : name,
+                        "comment"   : comment_text,
+                        "tablename" : "sources",
+                        "type"      : comment_type,
+                        "delete"    : "yes",
+                        "id"       : cmt_id,
+                     }
+            ret = growthcgi(
+                            'edit_comment.cgi', 
+                            logger=self.logger,
+                            auth=(self.user, self.passwd),
+                            data=req_data,
+                            to_json=False)
+        self.logger.debug("finished deleting comment(s).")
+
+    def comment(self, name, text, comment_type='comment', duplicate_mode='no', comment_id=None):
+        """
+            add a comment ('annotation', as they are called by the marshal backend) 
+            of the given type for a given source in the program.
+            
+            Parameters:
+            -----------
+                
+                name: `str`
+                    ZTF name of source.
+                
+                text: `str`
+                    body of the comment message
+                
+                comment_type: `str`
+                    type of comment. Default is 'comment'. Allowed values are: 
+                    ['info', 'phase', 'redshift', 'comment', 'classification']
+                
+                duplicate_mode: `str`
+                    either 'no' (default), 'edit', or 'add'. Specify what to do in
+                    case a comment with the same text, type, and author (or ID) is
+                    found for the source. In case of edit, the comment id has to be specified.
+                
+                comment_id: `int`
+                    ID of the comment. If None, don't filter on this field.
+        """
+        
+        # verify:
+        allowed_types = ['info', 'phase', 'redshift', 'comment', 'classification']
+        if comment_type not in allowed_types:
+            raise ValueError("comment type '%s' not allowed. Possible values are: %s"%
+                (comment_type, repr(allowed_types)))
+        dup_opt = ['add', 'no', 'edit']
+        if duplicate_mode not in dup_opt:
+            raise ValueError("value '%s' not allowed for parameter 'dupliacte'. Possible values are: %s"%
+                (duplicate, repr(dup_opt)))
+        if duplicate_mode == 'edit' and comment_id is None:
+            raise ValueError("you need to provide a comment_id for the comment you like to edit")
+        
+        # find the source among thesaved ones to access its id. You need it to comment.
+        src = self.get_source(name)
+        if src is None:
+            raise ValueError("cannot comment a source that can't be found.")
+        
+        # check if the comment is new and if you want to duplicate it
+        if duplicate_mode == 'no':
+            prev_comments = self.read_comments(
+                name, comment_type=comment_type, comment_text=text, comment_author='self', comment_id=comment_id)
+            if len(prev_comments) != 0:
+                self.logger.warning("Already existsing comment will not be duplicated.")
+                return None
+        
+        # almost ready to post, here are the args
+        req_data = {
+                    "name"      : name,
+                    "comment"   : text,
+                    "tablename" : "sources",
+                    "type"      : comment_type,
+                    "commit"    : "yes",
+                    "sourceid"  : src['id']
+            }
+        
+        # if you want to edit an existing comment you have to have the ID
+        if duplicate_mode == 'edit':
+            req_data['id'] = comment_id
+        
+        # post the request
+        self.logger.debug("posting comment '%s' (type: %s) to source: %s (id: %d)"%
+            (text, comment_type, name, src['id']))
+        ret = growthcgi(
+                        'edit_comment.cgi', 
+                        logger=self.logger,
+                        auth=(self.user, self.passwd),
+                        data=req_data,
+                        to_json=False)
+        self.logger.debug("done commenting source.")
 
     def source_summary(self, name, append=False, refresh=False):
         """
@@ -465,7 +635,6 @@ class ProgramList(BaseTable):
                     self.logger.warning("source %s has no summary"%(name))
                 else:
                     self.logger.debug("got source summary for source %s."%name)
-                
                 # eventually append
                 if append:
                     src['summary'] = summary
