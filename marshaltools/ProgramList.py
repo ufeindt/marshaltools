@@ -111,12 +111,41 @@ class ProgramList(BaseTable):
         self.logger.info("Initialized ProgramList for program %s (ID %d)"%(self.program, self.programidx))
         self._dustmap = None
         
+        # this is the general, 'program wide' ID used to query for candidates.
+        # stars with a None, and it will be read from marshaltools.gci_utils.SCIENCEPROGRAM_IDS
+        # use set_querycandidates_programid method to change its value
+        self.science_program_id = None
+        
         # now load all the saved sources
         if load_sources:
             self.get_saved_sources()
         if load_candidates:
             self.get_candidates()
         self.lightcurves = None
+
+
+    def set_querycandidates_programid(self, science_program_id):
+        """
+            apparently the program ID you use to ingest/save candidates 
+            is different from the one you use to query the candidate page.
+            In particular, the first one seems to be 'user specific', while
+            the second one is 'program specific'. This is, at least, what I 
+            have understood for now.
+            
+            Some of these 'program specific' IDs are listed in marshaltools.gci_utils.SCIENCEPROGRAM_IDS.
+            If your channel is not there, you can use this function to set 
+            it on the fly.
+            
+            Parameters:
+            -----------
+            
+                science_program_id: `int`
+                    'program-specific' ID, used, e.g. when querying for candidates.
+        """
+        
+        self.science_program_id = science_program_id
+        self.logger.debug("setting SCIENCE program ID for program %s to %d"%
+            (self.program, self.science_program_id))
 
 
     def ingest_avro(self, avro_id, be_anal=True, max_attempts=3):
@@ -146,7 +175,8 @@ class ProgramList(BaseTable):
             avro_ids = avro_id,
             program_name = self.program,
             program_id = self.programidx,
-            be_anal = be_anal, 
+            be_anal = be_anal,
+            query_program_id = self.science_program_id,
             max_attempts = max_attempts,
             auth=(self.user, self.passwd), 
             logger=self.logger
@@ -181,11 +211,14 @@ class ProgramList(BaseTable):
         
         # if you don't pass the programID go read it from the static list of program-names & ids.
         if programidx is None:
-            programidx = SCIENCEPROGRAM_IDS.get(self.program, -666)
-            if programidx == -666:
-                raise KeyError("program %s is not listed in `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`. Go and add it yourself!")
-            self.logger.info("reading programid from `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`")
-            self.logger.info("programid for saving candidates for program %s: %d"%(self.program, programidx))
+            if self.science_program_id is None:
+                programidx = SCIENCEPROGRAM_IDS.get(self.program, -666)
+                if programidx == -666:
+                    raise KeyError("program %s is not listed in `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`. Go and add it yourself!")
+                self.logger.debug("reading programid from `marshaltools.gci_utils.SCIENCEPROGRAM_IDS`")
+            else:
+                programidx = self.science_program_id
+        self.logger.info("programid for saving candidates for program %s: %d"%(self.program, programidx))
         
         # parse save_by to cgi acceptable key
         if save_by == 'name':
@@ -678,13 +711,13 @@ class ProgramList(BaseTable):
             start_date = "2018-03-01 00:00:00"
         if end_date is None:
             end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
-        
         return query_scanning_page(
                                     start_date, 
                                     end_date,
                                     program_name=self.program,
                                     showsaved=showsaved,
                                     auth=(self.user, self.passwd),
+                                    program_id = self.programidx,
                                     logger=self.logger)
 
 

@@ -48,7 +48,8 @@ SCIENCEPROGRAM_IDS = {
     'Redshift Completeness Factor'                  : 24,
     'Weizmann Test Filter'                          : 45,
     'ZTFBH Offnucear'                               : 47,
-    'Nuclear Transients'                            : 10
+    'Nuclear Transients'                            : 10,
+    #'AmpelRapid'                                    : 67
     }
 
 INGEST_PROGRAM_IDS = {                              # TODO add all of them
@@ -130,20 +131,25 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
     return rinfo
 
 
-def query_scanning_page(start_date, end_date, program_name, showsaved="selected", auth=None, logger=None):
+def query_scanning_page(start_date, end_date, program_name, showsaved="selected", auth=None, logger=None, program_id=None):
     """
         return the sources in the scanning page of the given program ingested in the
         marshall between start_date and end_date.
     """
     
+    # TODO: the ID used to query the scanning page seems to be different from
+    # the one you get from lits programs.
+    
     # get the logger
     logger = logger if not logger is None else logging.getLogger(__name__)
     
     # get scienceprogram number
-    scienceprogram = SCIENCEPROGRAM_IDS.get(program_name)
-    if scienceprogram is None:
-        raise KeyError("cannot find scienceprogram number corresponding to program %s. We have: %s"%
-            (program_name, repr(SCIENCEPROGRAM_IDS)))
+    scienceprogram = program_id
+    if program_id is None:
+        scienceprogram = SCIENCEPROGRAM_IDS.get(program_name)
+        if scienceprogram is None:
+            raise KeyError("cannot find scienceprogram number corresponding to program %s. We have: %s"%
+                (program_name, repr(SCIENCEPROGRAM_IDS)))
     
     # format dates to astropy.Time 
     tstart = Time(start_date) if type(start_date) is str else start_date
@@ -170,7 +176,7 @@ def query_scanning_page(start_date, end_date, program_name, showsaved="selected"
     return srcs
 
 
-def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=3, auth=None, logger=None):
+def ingest_candidates(avro_ids, program_name, program_id, query_program_id, be_anal, max_attempts=3, auth=None, logger=None):
     """
         ingest one or more candidate(s) by avro id into the marhsal.
         If needed we can be anal about it and go and veryfy the ingestion.
@@ -239,7 +245,8 @@ def ingest_candidates(avro_ids, program_name, program_id, be_anal, max_attempts=
                 start_date=start_ingestion.iso, 
                 end_date=end_ingestion.iso, 
                 program_name=program_name,
-                showsaved="selected", 
+                showsaved="selected",
+                program_id=query_program_id,
                 auth=auth, 
                 logger=logger)
             
