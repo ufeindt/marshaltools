@@ -7,6 +7,7 @@
 import requests
 import numpy as np
 from astropy.table import Table
+from astropy.io.ascii import InconsistentTableError
 
 from marshaltools import BaseTable
 from marshaltools.filters import _DEFAULT_FILTERS
@@ -56,7 +57,38 @@ class MarshalLightcurve(BaseTable):
         r = r_text.split('<table border=0 width=850>')[-1]
         r = r.replace(' ', '').replace('\n', '')
         r = '\n'.join(r.split('<br>'))
-        self.table_orig = Table.read(r, format='ascii.csv')
+
+        # extra commas in text, and unescaped inverted commas from arc sec
+        # Wrap in try/except and treat exception 
+        try:
+            self.table_orig = Table.read(r, format='ascii.csv')
+        except InconsistentTableError:
+            # do a line by line treatment
+            x = r.split('\n')
+            # Get number of columns from the header: `numcols`
+            headers = x[0]
+            numcols = len(headers.split(','))
+            y = []
+            for i, line in enumerate(x):
+                # print('we have {0} columns and {1} rows'.format(numcols, len(x)))
+                l = line.split(',')
+                # Assume problems are due to more columns
+                if len(l) > numcols:
+                    # Assume that the problems are due to the
+                    # commas in the [-2] position.
+                    xx = '; '.join(l[numcols - 2: -1])
+                    line = l[:numcols - 2]
+                    line.append(xx)
+                    line.append(l[-1])
+                    l = line
+                    line = ','.join(l)
+                # y is a list of lines, each line is a string
+                # collects lines which were good and (fixed) bad
+                y.append(line)
+            r = '\n'.join(y)
+            # Makes r a text block; like r without the error
+            self.table_orig = Table.read(r, format='ascii.csv')
+            pass
         self._remove_duplicates_()
 
         
