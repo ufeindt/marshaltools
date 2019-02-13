@@ -15,11 +15,11 @@ import concurrent.futures
 import logging
 logging.basicConfig(level = logging.INFO)
 
-from marshaltools import BaseTable
-from marshaltools import MarshalLightcurve
-from marshaltools import SurveyFields, ZTFFields
-from marshaltools.gci_utils import growthcgi, query_scanning_page, ingest_candidates, SCIENCEPROGRAM_IDS
-from marshaltools.filters import _DEFAULT_FILTERS
+from .BaseTable import BaseTable
+from .MarshalLightcurve import MarshalLightcurve
+from .surveyfields import SurveyFields, ZTFFields
+from .gci_utils import growthcgi, query_scanning_page, ingest_candidates, SCIENCEPROGRAM_IDS
+from .filters import _DEFAULT_FILTERS
 
 try:
     import sfdmap

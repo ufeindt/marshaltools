@@ -9,9 +9,9 @@ import numpy as np
 from astropy.table import Table
 from astropy.io.ascii import InconsistentTableError
 
-from marshaltools import BaseTable
-from marshaltools.filters import _DEFAULT_FILTERS
-from marshaltools.gci_utils import growthcgi
+from .BaseTable import BaseTable
+from .filters import _DEFAULT_FILTERS
+from .gci_utils import growthcgi
 
 class MarshalLightcurve(BaseTable):
     """Class for the lightcurve of a single source in the Marshal
