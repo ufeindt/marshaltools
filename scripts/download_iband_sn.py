@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+"""
+Script to download all ZTF SN from the marshall which have iband fluxes in the marshall 
+"""
 import marshaltools
 from marshaltools import ProgramList
 import numpy as np

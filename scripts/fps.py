@@ -1,14 +1,44 @@
 #!/usr/bin/env python
-import pandas as pd
+"""
+Script useful for triggering  the ZTF Forced Photometry Service:
+
+Provided the name of a ZTF object, this script will use SN light curves and metadata
+downloaded using `marshalltools` to produce the submission command (which must
+entered manually), and plots of the `marshall` light curve in `mags`, `fluxes`
+Signal to Noise.
+
+INPUT:
+    - requires csv files to be downloaded previously using marshalltools. The
+    script to download these files is `download_iband_sn.py`.
+    - name of ZTFobject:
+
+OUTPUT:
+    - shows a plot of the light curves in marshall bands in mag, fluxes, and SNR.
+    - produces a string which should be pasted to the terminal for initiating ZTF
+
+
+EXAMPLE USAGE:
+python fps.py --name ZTF18aaermez
+"""
+import os
 import sys
+import json
 from argparse import ArgumentParser
 import datetime
+import pandas as pd
 
 
-username = "ztffps"
-passwd = 'dontgocrazy!'
-email = 'rahul.biswas@fysik.su.se' 
 
+# Obtain password and username from stored file
+_AUTH_FILE = os.path.join(os.environ.get('HOME'), '.ztf', 'ztffps_auth.json')
+with open(_AUTH_FILE, "r") as fh:
+    auth = json.load(fh)
+
+username = auth['username']
+passwd = auth['password']
+email = auth['email']
+
+print(username, passwd, email)
 summary_fname = 'cosmology_summary_with_iband.csv'
 lightcurve_fname = 'cosmology_lc_with_iband.csv'
 
