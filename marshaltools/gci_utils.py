@@ -25,7 +25,8 @@ MARSHALL_SCRIPTS = (
                     'print_lc.cgi',
                     'ingest_avro_id.cgi',
                     'save_cand_growth.cgi',
-                    'edit_comment.cgi'
+                    'edit_comment.cgi',
+                    'update_archived_phot.cgi'
                     )
 
 httpErrors = {
