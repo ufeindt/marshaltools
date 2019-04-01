@@ -36,7 +36,7 @@ class MarshalLightcurve(BaseTable):
         kwargs = self._load_config_(**kwargs)
 
         self.name = name
-        self.redshift = redshift
+        self.redshift = np.float(redshift)
         self.classification = classification
         self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
         
@@ -47,13 +47,12 @@ class MarshalLightcurve(BaseTable):
         self.mwebv = mwebv
         
         # get the light curve into a table
-        r_text = growthcgi(
-                            'print_lc.cgi',
-                            to_json=False,
-                            logger=None,
-                            auth=(self.user, self.passwd),
-                            data={'name': self.name}
-                            )
+        r_text = growthcgi('print_lc.cgi',
+                           to_json=False,
+                           logger=None,
+                           auth=(self.user, self.passwd),
+                           data={'name': self.name})
+
         r = r_text.split('<table border=0 width=850>')[-1]
         r = r.replace(' ', '').replace('\n', '')
         r = '\n'.join(r.split('<br>'))
@@ -62,18 +61,24 @@ class MarshalLightcurve(BaseTable):
         # Wrap in try/except and treat exception 
         try:
             self.table_orig = Table.read(r, format='ascii.csv')
+
         except InconsistentTableError:
             # do a line by line treatment
             x = r.split('\n')
+
             # Get number of columns from the header: `numcols`
             headers = x[0]
             numcols = len(headers.split(','))
             y = []
+
+            # Iterate through lines that are not the header and append to the
+            # list y
             for i, line in enumerate(x):
-                # print('we have {0} columns and {1} rows'.format(numcols, len(x)))
                 l = line.split(',')
+
                 # Assume problems are due to more columns
                 if len(l) > numcols:
+
                     # Assume that the problems are due to the
                     # commas in the [-2] position.
                     xx = '; '.join(l[numcols - 2: -1])
@@ -82,38 +87,19 @@ class MarshalLightcurve(BaseTable):
                     line.append(l[-1])
                     l = line
                     line = ','.join(l)
+
                 # y is a list of lines, each line is a string
                 # collects lines which were good and (fixed) bad
                 y.append(line)
+
+            # Take the list of lines and join with newline characters
             r = '\n'.join(y)
+
             # Makes r a text block; like r without the error
             self.table_orig = Table.read(r, format='ascii.csv')
             pass
         self._remove_duplicates_()
 
-        
-        
-#        r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/print_lc.cgi',    #TODO: use gci_utils, add flag to not parse to json
-#                          auth=(self.user, self.passwd),
-#                          data={'name': self.name})
-#        r = r.text.split('<table border=0 width=850>')[-1]
-#        r = r.replace(' ', '').replace('\n', '')
-#        r = '\n'.join(r.split('<br>'))
-
-#        self.table_orig = Table.read(r, format='ascii.csv')
-#        self._remove_duplicates_()
-
-        # r = requests.post('http://skipper.caltech.edu:8080/cgi-bin/growth/view_source.cgi',
-        #           auth=(self.user, self.passwd), 
-        #           data={'name': self.name})
-        # self.classification = (re.findall('150%\">.*<',
-        #                                   r.text.replace('\n', ''))[0]
-        #                        .split('<')[0].split('>')[-1].strip())
-        # try:
-        #     self.redshift = float(re.findall('[0-9]\.[0-9]*',
-        #                                      re.findall('z = [0-9\.]*', r.text)[0])[0])
-        # except IndexError:
-        #     self.redshift = None
 
     @property
     def table_sncosmo(self):
