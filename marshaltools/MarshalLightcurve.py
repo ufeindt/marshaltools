@@ -36,6 +36,8 @@ class MarshalLightcurve(BaseTable):
         kwargs = self._load_config_(**kwargs)
 
         self.name = name
+        if redshift is None or redshift == '':
+            redshift = np.nan
         self.redshift = np.float(redshift)
         self.classification = classification
         self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
