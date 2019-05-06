@@ -4,7 +4,9 @@
 # collection of funcions related to the marshall gci scripts. 
 #
 
-import requests, json, os
+import requests, json, os, time
+import numpy as np
+import concurrent.futures
 from astropy.time import Time
 import astropy.units as u
 
@@ -97,9 +99,7 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
     while n_try<max_attemps:
         logger.debug('Starting %s post. Attempt # %d'%(scriptname, n_try))
         # set timeout from kwargs or use default
-        timeout = request_kwargs.pop('timeout', 30) + (60*n_try-1)
-        
-        # post the request
+        timeout = request_kwargs.pop('timeout', 60) + (60*n_try-1)
         r = requests_retry_session().post(path, timeout=timeout, **request_kwargs)
         logger.debug('request URL: %s?%s'%(r.url, r.request.body))
         status = r.status_code
@@ -131,8 +131,74 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
         rinfo = r.text
     return rinfo
 
+def get_saved_sources(program_id, trange=None, auth=None, logger=None, **request_kwargs):
+    """
+        get saved sources for a program through the list_program_sources.cgi script.
+        Eventually specify a time range. 
+        
+        Parameters:
+        -----------
+        
+        program_id: `int`
+            marshal program ID.
+        
+        trange: `list` or `tuple` or None
+            time constraints for the query in the form of (start_date, end_date). The
+            two elements of tis list can be either strings or astropy.time.Time objects.
+            if None, try to download all the sources at once.
+        
+        auth: `list`
+            (username, pwd)
+        
+        Returns:
+        --------
+            list with the saved sources for the program.
+    """
+    
+    # get the logger
+    logger = logger if not logger is None else logging.getLogger(__name__)
+    
+    # prepare reuqtest data
+    req_data = {
+                'programidx': program_id,
+                'getredshift': 1,
+                'getclassification': 1
+            }
+    
+    # eventually add dates there
+    if not trange is None:
+        
+        # format dates to astropy.Time 
+        start_date, end_date = trange
+        tstart = Time(start_date) if type(start_date) is str else start_date
+        tend   = Time(end_date) if type(end_date) is str else end_date
+        tstart = tstart.datetime.strftime("%Y-%m-%d %H:%M:%S")
+        tend   = tend.datetime.strftime("%Y-%m-%d %H:%M:%S")
+        logger.debug("listing saved sources of scienceprogram ID %d for ingested times between %s and %s"%
+            (program_id, tstart, tend))
+        
+        # add date to payload
+        req_data.update({
+                        'startdate'  : tstart,
+                        'enddate'    : tend,
+                    })
+    else:
+        logger.debug("listing saved sources of scienceprogram ID %d"%program_id)
+    
+    # execute request 
+    srcs = growthcgi(
+            'list_program_sources.cgi',
+            logger=logger,
+            auth=auth,
+            data=req_data,
+            **request_kwargs
+            )
+    logger.debug("retrieved %d sources"%len(srcs))
+    return srcs
 
-def query_scanning_page(start_date, end_date, program_name, showsaved="selected", auth=None, logger=None, program_id=None):
+def query_scanning_page(
+    start_date, end_date, program_name, showsaved="selected", auth=None, 
+    logger=None, program_id=None, **request_kwargs):
     """
         return the sources in the scanning page of the given program ingested in the
         marshall between start_date and end_date.
@@ -170,14 +236,145 @@ def query_scanning_page(start_date, end_date, program_name, showsaved="selected"
                         'startdate'  : tstart,
                         'enddate'    : tend,
                         'showSaved'  : showsaved
-                        }
+                        },
+                    **request_kwargs
                 )
     
     logger.debug("retrieved %d sources"%len(srcs))
     return srcs
 
 
-def ingest_candidates(avro_ids, program_name, program_id, query_program_id, be_anal, max_attempts=3, auth=None, logger=None):
+def query_marshal_timeslice(query_func, trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False, logger=None):
+    """
+        splice up a marhsla query in time so that each request is manageble.
+        
+        Issue the query function in time slices each of tstep days (optionally
+        limiting the global time range) and glue the results together.
+        
+        The queries are executed in using a thread pool.
+        
+        Parameters:
+        -----------
+            
+            query_func: `callable`
+                query function to be run over the time slices. It must have the signature
+                query_func(tstart, tstop) and must return a list.
+            
+            trange: `list` or `tuple` or None
+                time constraints for the query in the form of (start_date, end_date). The
+                two elements of tis list can be either strings or astropy.time.Time objects.
+                
+                if None, all the sources in the scanning page are retrieved slicing the 
+                query in smaller time steps. Since the marhsall returns at max 200 candidates
+                per query, if tis limit is reached, the time range of the query is 
+                subdivided iteratively.
+            
+            tstep: `astropy.quantity`
+                time step to use to splice the query.
+            
+            nworkers: `int`
+                number of threads in the pool that are used to download the stuff.
+            
+            max_attemps: `int`
+                this function will re-iterate the download on the jobs that fails until
+                complete success or until the maximum number of attemps is reaced.
+            
+            raise_on_fail: `bool`
+                if after the max_attemps is reached, there are still failed jobs, the
+                function will raise and exception if raise_on_fail is True, else it 
+                will simply throw a warning.
+        
+        Returns:
+        --------
+            
+            list with the glued results from all the time-slice queries
+    """
+    
+    # get the logger
+    logger = logger if not logger is None else logging.getLogger(__name__)
+    
+    # parse time limts
+    if not trange is None:
+        start_date = trange[0]
+        end_date   = trange[1]
+    else:
+        start_date = "2018-03-01 00:00:00"
+        end_date   = (Time.now() +1*u.day).datetime.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # subdivide the query in time steps
+    start, end = Time(start_date), Time(end_date)
+    times = np.arange(start, end, tstep).tolist()
+    times.append(end)
+    logger.info("Querying marshal with %s between %s and %s using dt: %.2f h"%
+            (query_func.__name__, start_date, end_date, tstep.to('hour').value))
+    
+    # create list of time bounds
+    tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
+    
+    # utility functions for multiprocessing
+    def query_func_wrap(tlim): return query_func(tlim[0], tlim[1])
+    def threaded_downloads(todo_tlims, candidates):
+        """
+            download the sources for specified tlims and keep track of what you've done
+        """
+        
+        n_total, n_failed = len(todo_tlims), 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+            
+            jobs = {
+                executor.submit(query_func_wrap, tlim): tlim for tlim in todo_tlims}
+            
+            # inspect completed jobs
+            for job in concurrent.futures.as_completed(jobs):
+                tlim = jobs[job]
+                
+                # inspect job result
+                try:
+                    # collect all the results
+                    candids = job.result()
+                    candidates += candids
+                    logger.debug("Query from %s to %s returned %d candidates. Total: %d"%
+                        (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
+                    # if job is successful, remove the tlim from the todo list
+                    todo_tlims.remove(tlim)
+                    
+                except Exception as e:
+                    logger.error("Query from %s to %s generated an exception %s"%
+                        (tlim[0].iso, tlim[1].iso, repr(e)))
+                    n_failed+=1
+        
+        # print some info
+        logger.debug("jobs are done: total %d, failed: %d"%(n_total, n_failed))
+        
+        
+    # loop through the list of time limits and spread across multiple threads
+    start = time.time()
+    candidates = []                         # here you collect sources you've successfully downloaded
+    n_try, todo_tlims = 0, tlims            # here you keep track of what is done and what is still to be done
+    while len(todo_tlims)>0 and n_try<max_attemps:
+        logger.debug("Querying the marshal. Iteration number %d: %d jobs to do"%
+            (n_try, len(todo_tlims)))
+        threaded_downloads(todo_tlims, candidates)
+        n_try+=1
+    end = time.time()
+    
+    # notify if it's still not enough
+    if len(todo_tlims)>0:
+        mssg = "Query for the following time interavals failed:\n"
+        for tl in todo_tlims: mssg += "%s %s\n"%(tl[0].iso, tl[1].iso)
+        if raise_on_fail:
+            raise RuntimeError(mssg)
+        else:
+            logger.error(mssg)
+    
+    # check for duplicates
+    logger.info("Fetched %d candidates/sources in %.2e sec"%(len(candidates), (end-start)))
+    return candidates
+
+
+def ingest_candidates(
+    avro_ids, program_name, program_id, query_program_id, be_anal, 
+    max_attempts=3, auth=None, logger=None, **request_kwargs):
     """
         ingest one or more candidate(s) by avro id into the marhsal.
         If needed we can be anal about it and go and veryfy the ingestion.
@@ -227,7 +424,8 @@ def ingest_candidates(avro_ids, program_name, program_id, query_program_id, be_a
                 logger=logger,
                 auth=auth,
                 to_json=False,
-                data={'avroid': avro_id, 'programidx': str(ingest_pid)}
+                data={'avroid': avro_id, 'programidx': str(ingest_pid)},
+                **request_kwargs
                 )
             logger.debug("Ingesting candidate %s returned %s"%(avro_id, status))
         logger.info("Attempt %d: done ingesting candidates."%n_attempts)
@@ -249,7 +447,8 @@ def ingest_candidates(avro_ids, program_name, program_id, query_program_id, be_a
                 showsaved="selected",
                 program_id=query_program_id,
                 auth=auth, 
-                logger=logger)
+                logger=logger,
+                **request_kwargs)
             
             # if you got none it could mean you haven't ingested them.
             # but could also be just a question of time. Death is the only certainty

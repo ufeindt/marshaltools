@@ -18,7 +18,8 @@ logging.basicConfig(level = logging.INFO)
 from .BaseTable import BaseTable
 from .MarshalLightcurve import MarshalLightcurve
 from .surveyfields import SurveyFields, ZTFFields
-from .gci_utils import growthcgi, query_scanning_page, ingest_candidates, SCIENCEPROGRAM_IDS
+from .gci_utils import (growthcgi, query_scanning_page, ingest_candidates,
+                        SCIENCEPROGRAM_IDS, query_marshal_timeslice, get_saved_sources)
 from .filters import _DEFAULT_FILTERS
 
 try:
@@ -96,7 +97,7 @@ class ProgramList(BaseTable):
                    see _DEFAULT_FILTERS for an example.
     """
 
-    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, **kwargs):
+    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, timeout=60, **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
@@ -105,6 +106,9 @@ class ProgramList(BaseTable):
         self.program = program
         self.sfd_dir = sfd_dir
         self.filter_dict = kwargs.pop('filter_dict', _DEFAULT_FILTERS)
+        
+        # set the timeout for the connection with the marshal
+        self.timeout = timeout
         
         # look for the corresponding program id
         self.get_programidx()
@@ -179,7 +183,8 @@ class ProgramList(BaseTable):
             query_program_id = self.science_program_id,
             max_attempts = max_attempts,
             auth=(self.user, self.passwd), 
-            logger=self.logger
+            logger=self.logger,
+            timeout=self.timeout
             )
 
     def save_sources(self, candidate, programidx=None, save_by='name', max_attempts=3, be_anal=True):
@@ -249,7 +254,8 @@ class ProgramList(BaseTable):
                     logger=self.logger,
                     to_json=False,
                     auth=(self.user, self.passwd),
-                    data={'program': programidx, cgi_key: cand}
+                    data={'program': programidx, cgi_key: cand},
+                    timeout=self.timeout
                     )
                 self.logger.debug("Ingesting candidate %s returned %s"%(cand, status))
             self.logger.info("Attempt %d: done ingesting candidates."%n_attempts)
@@ -295,7 +301,8 @@ class ProgramList(BaseTable):
             logger=self.logger,
             to_json=False,
             auth=(self.user, self.passwd),
-            data={'program': programidx, 'candname': candname}
+            data={'program': programidx, 'candname': candname},
+            timeout=self.timeout
             )
 
     def _list_programids(self):
@@ -304,7 +311,8 @@ class ProgramList(BaseTable):
         """
         if not hasattr(self, 'program_list'):
             self.logger.debug("listing accessible programs")
-            self.program_list = growthcgi('list_programs.cgi', logger=self.logger, auth=(self.user, self.passwd))
+            self.program_list = growthcgi(
+                'list_programs.cgi', logger=self.logger, auth=(self.user, self.passwd), timeout=self.timeout)
 
     def get_programidx(self):
         """
@@ -319,22 +327,51 @@ class ProgramList(BaseTable):
             raise ValueError('Could not find program "%s". You are member of: %s'%(
                 self.program, ', '.join([p['name'] for p in self.program_list])))
 
-    def get_saved_sources(self):
+    def get_saved_sources(self, trange=None, tstep=15*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
         """
-            get all saved sources for this program
+            get all saved sources for this program. Optionally provide
+            a (startdate, stopdate) list for trange to limt the query in
+            time.
+            
+            see docs of ProgramList.get_candidates for explanation of the arguments.
         """
         
-        # execute request 
-        s_tmp = growthcgi(
-            'list_program_sources.cgi',
-            logger=self.logger,
-            auth=(self.user, self.passwd),
-            data={
-                'programidx': self.programidx,
-                'getredshift': 1,
-                'getclassification': 1,
-                }
-            )
+        # execute the request. For crowded programs this can time out
+        # so we catch the exception and use time slices to get the 
+        # sources.
+        try:
+            s_tmp = get_saved_sources(
+                                        program_id=self.programidx, 
+                                        trange=trange, 
+                                        auth=(self.user, self.passwd), 
+                                        logger=self.logger,
+                                        timeout=self.timeout,
+                                )
+        except requests.exceptions.ReadTimeout as exc:
+            self.logger.warning(
+                "list_program_sources.cgi timed out. Exception: %s"%str(exc))
+            self.logger.warning("Splitting query in time slices.")
+            
+            # create a query function
+            def query_saved_sources(tstart, tstop):
+                return get_saved_sources(
+                                        program_id=self.programidx, 
+                                        trange=(tstart, tstop), 
+                                        auth=(self.user, self.passwd), 
+                                        logger=self.logger,
+                                        timeout=5*self.timeout,
+                                )
+            
+            # run the query with parallel time slices
+            s_tmp = query_marshal_timeslice(
+                                    query_saved_sources, 
+                                    trange=trange, 
+                                    tstep=tstep, 
+                                    nworkers=nworkers, 
+                                    max_attemps=max_attemps, 
+                                    raise_on_fail=raise_on_fail, 
+                                    logger=None
+                            )
         
         # now parse the json file into a dictionary of sources
         self.sources = {s_['name']: s_ for s_ in s_tmp}
@@ -534,7 +571,8 @@ class ProgramList(BaseTable):
                             logger=self.logger,
                             auth=(self.user, self.passwd),
                             data=req_data,
-                            to_json=False)
+                            to_json=False,
+                            timeout=self.timeout)
         self.logger.debug("finished deleting comment(s).")
 
     def comment(self, name, text, comment_type='comment', duplicate_mode='no', comment_id=None):
@@ -611,7 +649,8 @@ class ProgramList(BaseTable):
                         logger=self.logger,
                         auth=(self.user, self.passwd),
                         data=req_data,
-                        to_json=False)
+                        to_json=False,
+                        timeout=self.timeout)
         self.logger.debug("done commenting source.")
 
     def source_summary(self, name, append=False, refresh=False):
@@ -663,6 +702,7 @@ class ProgramList(BaseTable):
                         logger=self.logger,
                         auth=(self.user, self.passwd),
                         data={'sourceid' : src_id},
+                        timeout=self.timeout
                         )
                 if summary == {}:
                     self.logger.warning("source %s has no summary"%(name))
@@ -718,7 +758,8 @@ class ProgramList(BaseTable):
                                     showsaved=showsaved,
                                     auth=(self.user, self.passwd),
                                     program_id = self.programidx,
-                                    logger=self.logger)
+                                    logger=self.logger,
+                                    timeout=self.timeout)
 
 
     def get_candidates(self, showsaved="selected", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
@@ -762,82 +803,23 @@ class ProgramList(BaseTable):
                     will simply throw a warning.
         """
         
-        # parse time limts
-        if not trange is None:
-            start_date = trange[0]
-            end_date   = trange[1]
-        else:
-            start_date = "2018-03-01 00:00:00"
-            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+        self.logger.info("Getting scanning page transient for program %s"%self.program)
         
-        # subdivide the query in time steps
-        start, end = Time(start_date), Time(end_date)
-        times = np.arange(start, end, tstep).tolist()
-        times.append(end)
-        self.logger.info("Getting scanning page transient for program %s between %s and %s using dt: %.2f h"%
-                (self.program, start_date, end_date, tstep.to('hour').value))
-        
-        # create list of time bounds
-        tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
-        
-        # utility functions for multiprocessing
-        def download_candidates(tlim):
-            candids = self.query_candidate_page(showsaved, tlim[0], tlim[1])
+        # create a query function
+        def query_candidate_page(tstart, tstop):
+            candids = self.query_candidate_page(showsaved, tstart, tstop)
             return candids
         
-        def threaded_downloads(todo_tlims, candidates):
-            """
-                download the sources for specified tlims and keep track of what you've done
-            """
-            
-            n_total, n_failed = len(todo_tlims), 0
-            with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
-                
-                jobs = {
-                    executor.submit(download_candidates, tlim): tlim for tlim in todo_tlims}
-                
-                # inspect completed jobs
-                for job in concurrent.futures.as_completed(jobs):
-                    tlim = jobs[job]
-                    
-                    # inspect job result
-                    try:
-                        # collect all the results
-                        candids = job.result()
-                        candidates += candids
-                        self.logger.debug("Query from %s to %s returned %d candidates. Total: %d"%
-                            (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
-                        # if job is successful, remove the tlim from the todo list
-                        todo_tlims.remove(tlim)
-                        
-                    except Exception as e:
-                        self.logger.error("Query from %s to %s generated an exception %s"%
-                            (tlim[0].iso, tlim[1].iso, repr(e)))
-                        n_failed+=1
-            
-            # print some info
-            self.logger.info("jobs are done: total %d, failed: %d"%(n_total, n_failed))
-            
-            
-        # loop through the list of time limits and spread across multiple threads
-        start = time.time()
-        candidates = []                         # here you collect sources you've successfully downloaded
-        n_try, todo_tlims = 0, tlims            # here you keep track of what is done and what is still to be done
-        while len(todo_tlims)>0 and n_try<max_attemps:
-            self.logger.info("Downloading candidates. Iteration number %d: %d jobs to do"%
-                (n_try, len(todo_tlims)))
-            threaded_downloads(todo_tlims, candidates)
-            n_try+=1
-        end = time.time()
-        
-        # notify if it's still not enough
-        if len(todo_tlims)>0:
-            mssg = "Query for the following time interavals failed:\n"
-            for tl in todo_tlims: mssg += "%s %s\n"%(tl[0].iso, tl[1].iso)
-            if raise_on_fail:
-                raise RuntimeError(mssg)
-            else:
-                self.logger.error(mssg)
+        # run the query with parallel time slices
+        candidates = query_marshal_timeslice(
+                                query_candidate_page, 
+                                trange=trange, 
+                                tstep=tstep, 
+                                nworkers=nworkers, 
+                                max_attemps=max_attemps, 
+                                raise_on_fail=raise_on_fail, 
+                                logger=self.logger
+                            )
         
         # check for duplicates
         names = [s['name'] for s in candidates]
@@ -846,8 +828,137 @@ class ProgramList(BaseTable):
         
         # turn the candidate list into a dictionary
         self.candidates = {s['name']:s for s in candidates}
-        self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
         return self.candidates
+
+
+
+#    def get_candidates_old(self, showsaved="selected", trange=None, tstep=5*u.day, nworkers=12, max_attemps=2, raise_on_fail=False):
+#        """
+#            download the list fo the sources in the scanning page of this program.
+#            
+#            Parameters:
+#            -----------
+#                
+#                showsaved: `str`
+#                    weather or not to include previously saved candidates. Possible options are:
+#                        * None ?
+#                        * 'selected'
+#                        * 'notSelected' ?
+#                        * 'onlySelected' ?
+#                        * 'onlyNotSelected' ?
+#                        * 'all' ?
+#                
+#                trange: `list` or `tuple` or None
+#                    time constraints for the query in the form of (start_date, end_date). The
+#                    two elements of tis list can be either strings or astropy.time.Time objects.
+#                    
+#                    if None, all the sources in the scanning page are retrieved slicing the 
+#                    query in smaller time steps. Since the marhsall returns at max 200 candidates
+#                    per query, if tis limit is reached, the time range of the query is 
+#                    subdivided iteratively.
+#                
+#                tstep: `astropy.quantity`
+#                    time step to use to splice the query.
+#                
+#                nworkers: `int`
+#                    number of threads in the pool that are used to download the stuff.
+#                
+#                max_attemps: `int`
+#                    this function will re-iterate the download on the jobs that fails until
+#                    complete success or until the maximum number of attemps is reaced.
+#                
+#                raise_on_fail: `bool`
+#                    if after the max_attemps is reached, there are still failed jobs, the
+#                    function will raise and exception if raise_on_fail is True, else it 
+#                    will simply throw a warning.
+#        """
+#        
+#        # parse time limts
+#        if not trange is None:
+#            start_date = trange[0]
+#            end_date   = trange[1]
+#        else:
+#            start_date = "2018-03-01 00:00:00"
+#            end_date   = Time.now().datetime.strftime("%Y-%m-%d %H:%M:%S")
+#        
+#        # subdivide the query in time steps
+#        start, end = Time(start_date), Time(end_date)
+#        times = np.arange(start, end, tstep).tolist()
+#        times.append(end)
+#        self.logger.info("Getting scanning page transient for program %s between %s and %s using dt: %.2f h"%
+#                (self.program, start_date, end_date, tstep.to('hour').value))
+#        
+#        # create list of time bounds
+#        tlims = [ [times[it-1], times[it]] for it in range(1, len(times))]
+#        
+#        # utility functions for multiprocessing
+#        def download_candidates(tlim):
+#            candids = self.query_candidate_page(showsaved, tlim[0], tlim[1])
+#            return candids
+#        
+#        def threaded_downloads(todo_tlims, candidates):
+#            """
+#                download the sources for specified tlims and keep track of what you've done
+#            """
+#            
+#            n_total, n_failed = len(todo_tlims), 0
+#            with concurrent.futures.ThreadPoolExecutor(max_workers = nworkers) as executor:
+#                
+#                jobs = {
+#                    executor.submit(download_candidates, tlim): tlim for tlim in todo_tlims}
+#                
+#                # inspect completed jobs
+#                for job in concurrent.futures.as_completed(jobs):
+#                    tlim = jobs[job]
+#                    
+#                    # inspect job result
+#                    try:
+#                        # collect all the results
+#                        candids = job.result()
+#                        candidates += candids
+#                        self.logger.debug("Query from %s to %s returned %d candidates. Total: %d"%
+#                            (tlim[0].iso, tlim[1].iso, len(candids), len(candidates)))
+#                        # if job is successful, remove the tlim from the todo list
+#                        todo_tlims.remove(tlim)
+#                        
+#                    except Exception as e:
+#                        self.logger.error("Query from %s to %s generated an exception %s"%
+#                            (tlim[0].iso, tlim[1].iso, repr(e)))
+#                        n_failed+=1
+#            
+#            # print some info
+#            self.logger.info("jobs are done: total %d, failed: %d"%(n_total, n_failed))
+#            
+#            
+#        # loop through the list of time limits and spread across multiple threads
+#        start = time.time()
+#        candidates = []                         # here you collect sources you've successfully downloaded
+#        n_try, todo_tlims = 0, tlims            # here you keep track of what is done and what is still to be done
+#        while len(todo_tlims)>0 and n_try<max_attemps:
+#            self.logger.info("Downloading candidates. Iteration number %d: %d jobs to do"%
+#                (n_try, len(todo_tlims)))
+#            threaded_downloads(todo_tlims, candidates)
+#            n_try+=1
+#        end = time.time()
+#        
+#        # notify if it's still not enough
+#        if len(todo_tlims)>0:
+#            mssg = "Query for the following time interavals failed:\n"
+#            for tl in todo_tlims: mssg += "%s %s\n"%(tl[0].iso, tl[1].iso)
+#            if raise_on_fail:
+#                raise RuntimeError(mssg)
+#            else:
+#                self.logger.error(mssg)
+#        
+#        # check for duplicates
+#        names = [s['name'] for s in candidates]
+#        if len(set(names)) != len(names):
+#            self.logger.warning("Duplicate candidates!")
+#        
+#        # turn the candidate list into a dictionary
+#        self.candidates = {s['name']:s for s in candidates}
+#        self.logger.info("Fetched %d candidates in %.2e sec"%(len(self.candidates), (end-start)))
+#        return self.candidates
 
 
     def fetch_all_lightcurves(self):
