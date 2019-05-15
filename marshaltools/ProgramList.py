@@ -97,7 +97,7 @@ class ProgramList(BaseTable):
                    see _DEFAULT_FILTERS for an example.
     """
 
-    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, timeout=60, **kwargs):
+    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, timeout=300, **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
