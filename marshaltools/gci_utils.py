@@ -51,7 +51,7 @@ SCIENCEPROGRAM_IDS = {
     'Redshift Completeness Factor'                  : 24,
     'Weizmann Test Filter'                          : 45,
     'ZTFBH Offnucear'                               : 47,
-    'ZTFBH Nuclear'                                  : 48,
+    'ZTFBH Nuclear'                                 : 48,
     'Nuclear Transients'                            : 10,
     #'AmpelRapid'                                    : 67
     }
