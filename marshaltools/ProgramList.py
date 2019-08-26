@@ -1073,7 +1073,10 @@ class ProgramList(BaseTable):
             return self._dustmap
         elif _HAS_SFDMAP:
             if self.sfd_dir is None:
-                self._dustmap = sfdmap.SFDMap()
+                if os.environ.get('SFD_DIR') is not None:
+                    self._dustmap = sfdmap.SFDMap()
+                else:
+                    return None
             else:
                 self._dustmap = sfdmap.SFDMap(self.sfd_dir)
             return self._dustmap
