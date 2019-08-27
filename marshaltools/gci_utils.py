@@ -117,7 +117,7 @@ def growthcgi(scriptname, to_json=True, logger=None, max_attemps=2, **request_kw
         n_try+=1
     
     if not success:
-        self.logger.error("Failure despite %d attemps!"%max_attemps)
+        logger.error("Failure despite %d attemps!"%max_attemps)
         return None
     
     # parse result to JSON
