@@ -28,7 +28,8 @@ MARSHALL_SCRIPTS = (
                     'ingest_avro_id.cgi',
                     'save_cand_growth.cgi',
                     'edit_comment.cgi',
-                    'update_archived_phot.cgi'
+                    'update_archived_phot.cgi',
+                    'growth_treasures_transient.cgi'
                     )
 
 httpErrors = {
@@ -53,6 +54,8 @@ SCIENCEPROGRAM_IDS = {
     'ZTFBH Offnucear'                               : 47,
     'ZTFBH Nuclear'                                 : 48,
     'Nuclear Transients'                            : 10,
+    'Infant Supernovae'                             : 14,
+    'Transients in Elliptical Galaxies'             : 27
     #'AmpelRapid'                                    : 67
     }
 
