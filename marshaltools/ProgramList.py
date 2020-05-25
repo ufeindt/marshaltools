@@ -88,16 +88,21 @@ class ProgramList(BaseTable):
     Arguments:
     program -- name of the science program you are looking for (case-sensitive)
     Options:
-    user        -- Marshal username (overrides loading the name from file)
-    passwd      -- Marshal password (overrides loading the name from file)
-    filter_dict -- dictionary to assign the sncosmo bandpasses to combinations
-                   of instrument and filter columns. This is only needed if there 
-                   is non-P48 photometry. Keys are tuples of telescope+intrument 
-                   and filter, values are the sncosmo bandpass names, 
-                   see _DEFAULT_FILTERS for an example.
+    user         -- Marshal username (overrides loading the name from file)
+    passwd       -- Marshal password (overrides loading the name from file)
+    filter_dict  -- dictionary to assign the sncosmo bandpasses to combinations
+                    of instrument and filter columns. This is only needed if there 
+                    is non-P48 photometry. Keys are tuples of telescope+intrument 
+                    and filter, values are the sncosmo bandpass names, 
+                    see _DEFAULT_FILTERS for an example.
+    load_sources -- Call get_saved_source() (default is True)
+    trange       -- [start_date, end_date] for get_saved_sources(), the
+                    two elements of this list can be either strings (yyyy-mm-dd), or astropy.time.Time objects.
+                    default is if None and we try to download all the sources at once.
     """
 
-    def __init__(self, program, load_sources=True, load_candidates=False, sfd_dir=None, logger=None, timeout=300, **kwargs):
+    def __init__(self, program, load_sources=True, trange=None, 
+                    load_candidates=False, sfd_dir=None, logger=None, timeout=300, **kwargs):
         """
         """
         kwargs = self._load_config_(**kwargs)
@@ -122,7 +127,14 @@ class ProgramList(BaseTable):
         
         # now load all the saved sources
         if load_sources:
-            self.get_saved_sources()
+            self.get_saved_sources(trange=trange)
+        # or otherwise make empty source list if we dont have any sources loaded yet
+        else:
+            try:
+                dummy = self.sources 
+            except AttributeError:
+                self.sources = {}
+
         if load_candidates:
             self.get_candidates()
         self.lightcurves = None
@@ -374,7 +386,18 @@ class ProgramList(BaseTable):
                             )
         
         # now parse the json file into a dictionary of sources
-        self.sources = {s_['name']: s_ for s_ in s_tmp}
+        try:
+            #logger.debug('Done reading marshal.')
+            self.sources = {}
+            for s_ in s_tmp:
+                # deal with errors in output
+                if ('name' in s_) and type(s_) == type({}):
+                    self.sources[s_['name']]= s_                
+
+        except TypeError as e:
+            self.logger.error(e)
+            self.logger.debug(s_tmp)
+            return 
         
         # assign field and ccd value depending on position
         sf = ZTFFields()
